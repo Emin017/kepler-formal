@@ -137,34 +137,6 @@ The YAML equivalents are `btor2_export: true`,
 `btor2_export_path: equivalence.btor2`, and `dump_only: true`.
 See [BTOR2 export](docs/btor2-export.md) for examples and model semantics.
 
-### Python API
-
-Kepler Formal also provides a native Python API for files and live NajaEDA
-designs:
-
-```bash
-python -m pip install .
-```
-
-```python
-from kepler_formal import VerificationOptions, verify
-
-result = verify(
-    "reference.v",
-    "implementation.v",
-    options=VerificationOptions(log_file="verification.log"),
-)
-print(result.status)
-```
-
-The installed `najaeda` package provides the native netlist runtime used by
-Kepler Formal. `kepler_formal.najaeda` is an alias to that same package, not a
-second editor or universe. Use `from_najaeda()` and `verify_designs()` to
-compare live designs directly, without dumping or rebuilding them.
-
-See the [Python API guide](docs/python-api.md) for SEC options, structured
-results, live-design interoperability, and in-process lifetime constraints.
-
 ### Custom Python Primitives
 
 Custom technology primitives can be defined in Python and loaded through the
@@ -272,27 +244,6 @@ verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 ## Examples 
 
 See the organized [examples](examples).
-
-## Optional local MCP server
-
-An optional stdio MCP wrapper lives in [`mcp/`](mcp). Install it from this
-checkout with `python -m pip install ./mcp`, then start it with an explicit
-project root:
-
-```sh
-kepler-formal-mcp --project-root /absolute/path/to/design-project
-```
-
-It exposes one-shot `gate_lec`, `gate_sec`, and `rtl_sec` tools. Each invocation
-resolves `kepler-formal` from `PATH`, the local cache, or a checksummed GitHub
-Release; spawns a fresh native process; and enforces the caller's timeout. See
-the [MCP add-on README](mcp/README.md) for setup and the structured result
-taxonomy.
-
-The native stdio model is deliberate: local agent edits are immediately visible
-without Docker volume mapping, and kepler-formal only reads/checks design files.
-Containers remain the right packaging for CI or a future hosted deployment, not
-for this local editing loop.
 
 ## Contact
 
