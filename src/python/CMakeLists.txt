@@ -14,7 +14,7 @@ endif()
 
 add_library(kepler_borrowed_designs STATIC KeplerBorrowedDesigns.cpp)
 target_include_directories(kepler_borrowed_designs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(kepler_borrowed_designs PUBLIC kepler_formal_python_driver)
+target_link_libraries(kepler_borrowed_designs PUBLIC kepler_verification_support)
 
 Python3_add_library(kepler_formal_native MODULE WITH_SOABI PyKeplerFormal.cpp)
 set_target_properties(kepler_formal_native PROPERTIES

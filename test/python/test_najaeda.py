@@ -15,8 +15,9 @@ import kepler_formal
 import najaeda
 from najaeda import netlist
 
-from kepler_formal import VerificationOptions, verify
-from kepler_formal import _native
+from kepler_formal import (
+    VerificationOptions, VerificationStatus, from_najaeda, verify_designs,
+)
 
 
 def _run_isolated_python(source: str) -> subprocess.CompletedProcess[str]:
@@ -137,14 +138,8 @@ class SharedNajaedaRuntimeTest(unittest.TestCase):
         )
         self.root = Path(self.temporary.name)
         self.reference = self.root / "reference.v"
-        self.equivalent = self.root / "equivalent.v"
         self.reference.write_text(
             "module top(input a, output y); assign y = a; endmodule\n",
-            encoding="utf-8",
-        )
-        self.equivalent.write_text(
-            "module top(input a, output y); wire n; "
-            "assign n = a; assign y = n; endmodule\n",
             encoding="utf-8",
         )
 
@@ -152,20 +147,24 @@ class SharedNajaedaRuntimeTest(unittest.TestCase):
         netlist.reset()
         self.temporary.cleanup()
 
-    def test_file_api_rejects_an_active_editor_universe(self):
-        editor_top = netlist.create_top("editor_top")
+    def test_najaeda_loads_and_retains_the_editor_netlist(self):
+        editor_top = netlist.load_verilog(str(self.reference))
+        reference = from_najaeda(editor_top)
+        candidate = reference.najaeda_design.clone("candidate")
+        universe = najaeda.naja.NLUniverse.get()
+        universe.setTopDesign(candidate)
 
-        with self.assertRaisesRegex(RuntimeError, "universe"):
-            _native.run(["--help"])
-        with self.assertRaisesRegex(RuntimeError, "universe"):
-            verify(
-                self.reference,
-                self.equivalent,
-                options=VerificationOptions(log_file=self.root / "unused.log"),
-            )
+        result = verify_designs(
+            reference,
+            candidate,
+            options=VerificationOptions(log_file=self.root / "editor.log"),
+        )
 
-        self.assertEqual("editor_top", editor_top.get_name())
-        self.assertIsNotNone(najaeda.naja.NLUniverse.get())
+        self.assertEqual(VerificationStatus.EQUIVALENT, result.status)
+        self.assertIs(najaeda.naja.NLUniverse.get(), universe)
+        self.assertIs(universe.getTopDesign(), candidate)
+        self.assertEqual("top", reference.najaeda_design.getName())
+        self.assertEqual("candidate", candidate.getName())
 
 
 if __name__ == "__main__":

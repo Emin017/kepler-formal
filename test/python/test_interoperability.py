@@ -13,7 +13,6 @@ import najaeda
 from najaeda import netlist
 
 from kepler_formal import (
-    InputFormat,
     NativeDesign,
     SecEncoding,
     SecEngine,
@@ -139,14 +138,27 @@ class LiveNajaedaInteroperabilityTest(unittest.TestCase):
         reference = from_najaeda(self.reference)
         candidate = from_najaeda(self.candidate)
 
-        with self.assertRaisesRegex(ValueError, "input_format"):
+        with self.assertRaisesRegex(ValueError, "SEC"):
             verify_designs(
                 reference,
                 candidate,
-                options=VerificationOptions(input_format=InputFormat.NAJA_IF),
+                options=VerificationOptions(max_k=1),
             )
         with self.assertRaisesRegex(TypeError, "unknown"):
             _native.verify_designs(reference, candidate, {"unknown": True})
+
+        # A native logging failure occurs after the caller's state has been
+        # borrowed. It must return an error and leave both handles reusable.
+        top_before = self.universe.getTopDesign()
+        failed = verify_designs(
+            reference,
+            candidate,
+            options=VerificationOptions(mode=VerificationMode.SEC, log_file=self.root),
+        )
+        self.assertEqual(VerificationStatus.ERROR, failed.status)
+        self.assertTrue(failed.reason)
+        self.assertIs(najaeda.naja.NLUniverse.get(), self.universe)
+        self.assertIs(self.universe.getTopDesign(), top_before)
 
         self.candidate_parameter.setValue("2'h2")
         result = verify_designs(
@@ -171,20 +183,6 @@ class LiveNajaedaInteroperabilityTest(unittest.TestCase):
         self.candidate.destroy()
         with self.assertRaises(ReferenceError):
             verify_designs(handle, self.reference)
-
-    def test_file_only_options_are_rejected_before_the_native_call(self):
-        invalid_options = (
-            VerificationOptions(input_format=InputFormat.SYSTEMVERILOG),
-            VerificationOptions(libraries=["cells.v"]),
-            VerificationOptions(verilog_preprocessing=True),
-            VerificationOptions(compact=True),
-        )
-        with patch("kepler_formal.api._native.verify_designs") as native_verify:
-            for options in invalid_options:
-                with self.subTest(options=options):
-                    with self.assertRaises(ValueError):
-                        verify_designs(object(), object(), options=options)
-            native_verify.assert_not_called()
 
     def test_options_are_validated_before_native_object_conversion(self):
         with patch("kepler_formal.api._native.verify_designs") as native_verify:

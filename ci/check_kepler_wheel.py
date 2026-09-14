@@ -399,13 +399,106 @@ def _check_python_tag(
     )
 
 
+def _check_live_verification(root: Path) -> None:
+    """Load with NajaEDA, then lend the caller's live designs to Kepler."""
+    import najaeda
+    from kepler_formal import (
+        Solver, VerificationMode, VerificationOptions, VerificationStatus,
+        verify_designs,
+    )
+
+    naja = najaeda.naja
+    _require(naja.NLUniverse.get() is None, "unexpected active universe")
+    universe = naja.NLUniverse.create()
+    try:
+        loaded = []
+        for name, body in (
+            ("reference", "assign y = a;"),
+            ("equivalent", "wire n; assign n = a; assign y = n;"),
+            ("different", "assign y = 1'b0;"),
+        ):
+            source = root / f"{name}.v"
+            source.write_text(
+                f"module top(input a, output y); {body} endmodule\n",
+                encoding="utf-8",
+            )
+            # Separate databases let both designs keep their original top
+            # module name. All file parsing and parser cleanup stays in NajaEDA.
+            database = naja.NLDB.create(universe)
+            design = database.loadVerilog([str(source)])
+            loaded.append((database, design))
+
+        reference, equivalent, different = (design for _, design in loaded)
+        universe.setTopDesign(reference)
+
+        def check_loaded_state():
+            _require(naja.NLUniverse.get() is universe,
+                     "verification replaced the caller's universe")
+            _require(universe.getTopDesign() is reference,
+                     "verification changed the caller's current top")
+            for database, design in loaded:
+                _require(database.getLibrary("DESIGN").getSNLDesign("top") is design,
+                         "verification replaced/destroyed a loaded design")
+
+        for solver in (Solver.KISSAT, Solver.CADICAL, Solver.GLUCOSE):
+            for index, (candidate, expected) in enumerate((
+                (equivalent, VerificationStatus.EQUIVALENT),
+                (different, VerificationStatus.DIFFERENT),
+                (equivalent, VerificationStatus.EQUIVALENT),
+            )):
+                result = verify_designs(reference, candidate, options=VerificationOptions(
+                    solver=solver, log_file=root / f"loaded-{solver.value}-{index}.log"))
+                _require(result.status is expected,
+                         f"loaded {solver.value}: expected {expected.value}, "
+                         f"got {result.status.value}")
+                check_loaded_state()
+
+        # Fail inside native verification after it has borrowed the designs.
+        # An existing file cannot serve as the requested log's parent directory.
+        blocked_directory = root / "not-a-directory"
+        blocked_directory.write_text("block log creation", encoding="utf-8")
+        result = verify_designs(reference, equivalent, options=VerificationOptions(
+            mode=VerificationMode.SEC, log_file=blocked_directory / "failure.log"))
+        _require(result.status is VerificationStatus.ERROR,
+                 "invalid log destination did not fail native verification")
+        check_loaded_state()
+        result = verify_designs(reference, equivalent, options=VerificationOptions(
+            log_file=root / "after-native-error.log"))
+        _require(result.status is VerificationStatus.EQUIVALENT,
+                 "loaded designs could not be reused after a native error")
+        check_loaded_state()
+
+        # Also pass designs constructed directly through the original wrappers.
+        database = naja.NLDB.create(universe)
+        library = naja.NLLibrary.create(database, "shared")
+
+        def make_design(name: str):
+            design = naja.SNLDesign.create(library, name)
+            a = naja.SNLScalarTerm.create(design, naja.SNLTerm.Direction.Input, "a")
+            y = naja.SNLScalarTerm.create(design, naja.SNLTerm.Direction.Output, "y")
+            net = naja.SNLScalarNet.create(design, "a")
+            a.setNet(net)
+            y.setNet(net)
+            return design
+
+        first, second = make_design("first"), make_design("second")
+        for solver in (Solver.KISSAT, Solver.CADICAL, Solver.GLUCOSE):
+            result = verify_designs(first, second, options=VerificationOptions(
+                solver=solver, log_file=root / f"direct-{solver.value}.log"))
+            _require(result.status is VerificationStatus.EQUIVALENT,
+                     f"direct {solver.value} returned {result.status.value}")
+            _require(library.getSNLDesign("first") is first
+                     and library.getSNLDesign("second") is second,
+                     "verification replaced/destroyed a constructed design")
+            check_loaded_state()
+    finally:
+        # The caller owns this lifetime; verification must never end it.
+        universe.destroy()
+
+
 def _check_installed_api() -> None:
     import kepler_formal
     import najaeda
-    from kepler_formal import (
-        Solver, VerificationOptions, VerificationStatus, run_cli, verify,
-        verify_designs,
-    )
 
     distribution = importlib.metadata.distribution("kepler-formal")
     provider = importlib.metadata.distribution("najaeda")
@@ -427,64 +520,8 @@ def _check_installed_api() -> None:
     _check_shared_native_layout(
         native_files, _check_linkage(native_files), _native_files(provider))
 
-    # First exercise the existing owning/file API without an editor universe.
-    _require(najaeda.naja.NLUniverse.get() is None, "unexpected active universe")
-    _require(run_cli(("--help",)).exit_code == 0, "native --help failed")
     with tempfile.TemporaryDirectory(prefix="kepler_formal_wheel_") as temporary:
-        root = Path(temporary)
-        reference = root / "reference.v"
-        equivalent = root / "equivalent.v"
-        different = root / "different.v"
-        reference.write_text(
-            "module top(input a, output y); assign y = a; endmodule\n",
-            encoding="utf-8")
-        equivalent.write_text(
-            "module top(input a, output y); wire n; assign n = a; "
-            "assign y = n; endmodule\n", encoding="utf-8")
-        different.write_text(
-            "module top(input a, output y); assign y = 1'b0; endmodule\n",
-            encoding="utf-8")
-        for index, (candidate, expected) in enumerate((
-            (equivalent, VerificationStatus.EQUIVALENT),
-            (different, VerificationStatus.DIFFERENT),
-            (equivalent, VerificationStatus.EQUIVALENT),
-        )):
-            result = verify(reference, candidate, options=VerificationOptions(
-                log_file=root / f"file-{index}.log"))
-            _require(result.status is expected,
-                     f"expected {expected.value}, got {result.status.value}")
-            _require(najaeda.naja.NLUniverse.get() is None,
-                     "file API leaked its owned universe")
-
-        # Construct original Naja objects and pass their wrappers directly.
-        naja = najaeda.naja
-        universe = naja.NLUniverse.create()
-        db = naja.NLDB.create(universe)
-        library = naja.NLLibrary.create(db, "shared")
-        def make_design(name: str):
-            design = naja.SNLDesign.create(library, name)
-            a = naja.SNLScalarTerm.create(design, naja.SNLTerm.Direction.Input, "a")
-            y = naja.SNLScalarTerm.create(design, naja.SNLTerm.Direction.Output, "y")
-            net = naja.SNLScalarNet.create(design, "a")
-            a.setNet(net)
-            y.setNet(net)
-            return design
-        try:
-            first, second = make_design("first"), make_design("second")
-            universe.setTopDesign(first)
-            for solver in (Solver.KISSAT, Solver.CADICAL, Solver.GLUCOSE):
-                result = verify_designs(first, second, options=VerificationOptions(
-                    solver=solver, log_file=root / f"direct-{solver.value}.log"))
-                _require(result.status is VerificationStatus.EQUIVALENT,
-                         f"direct {solver.value} returned {result.status.value}")
-                _require(naja.NLUniverse.get() is universe,
-                         "borrowed call replaced the universe")
-                _require(universe.getTopDesign() is first,
-                         "borrowed call changed the current top")
-                _require(library.getSNLDesign("second") is second,
-                         "borrowed call replaced/destroyed its input")
-        finally:
-            universe.destroy()
+        _check_live_verification(Path(temporary))
 
     print(f"validated shared-runtime kepler-formal {distribution.version} "
           f"with najaeda {provider.version} ({', '.join(tags)})")

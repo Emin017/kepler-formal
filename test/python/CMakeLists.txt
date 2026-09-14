@@ -22,9 +22,9 @@ set_tests_properties(kepler-formal-python-tests PROPERTIES
 )
 
 add_executable(kepler-borrowed-native-tests borrowed_native_tests.cpp)
-# The provider packages file frontends in its Python bridge DSO. A standalone
-# test executable must supply Python symbols normally provided by the host
-# interpreter when the verifier is loaded as an extension.
+# The shared provider includes its Python bridge. A standalone test executable
+# supplies Python symbols normally provided by the host interpreter when the
+# borrowed-design verifier is loaded as an extension.
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module Development.Embed)
 target_link_libraries(kepler-borrowed-native-tests PRIVATE
   kepler_borrowed_designs Python3::Python)

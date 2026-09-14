@@ -4,7 +4,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
-#include <climits>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -14,7 +13,6 @@
 #include <vector>
 
 #include "KeplerBorrowedDesigns.h"
-#include "PythonDriver.h"
 #include "NajaPythonRuntimeAPI.h"
 #include "NajaRuntimeBuild.h"
 #include "NLUniverse.h"
@@ -252,32 +250,6 @@ PyObject *resultToDictionary(const KEPLER_FORMAL::RunResult &result) {
   return dictionary;
 }
 
-bool appendArgument(PyObject *value, std::vector<std::string> &arguments) {
-  OwnedPyObject path(PyOS_FSPath(value));
-  if (path == nullptr) {
-    return false;
-  }
-
-  PyObject *bytes = nullptr;
-  if (!PyUnicode_FSConverter(path.get(), &bytes)) {
-    return false;
-  }
-  OwnedPyObject ownedBytes(bytes);
-
-  char *data = nullptr;
-  Py_ssize_t size = 0;
-  if (PyBytes_AsStringAndSize(ownedBytes.get(), &data, &size) < 0) {
-    return false;
-  }
-  std::string argument(data, static_cast<size_t>(size));
-  if (argument.find('\0') != std::string::npos) {
-    PyErr_SetString(PyExc_ValueError,
-                    "Kepler Formal arguments cannot contain NUL bytes");
-    return false;
-  }
-  arguments.push_back(std::move(argument));
-  return true;
-}
 
 bool dictionaryString(PyObject *dictionary, const char *key,
                       std::string &value, bool allowNone = false) {
@@ -524,69 +496,6 @@ PyObject *verifyDesigns(PyObject *, PyObject *args) {
   }
 }
 
-PyObject *run(PyObject *, PyObject *args) {
-  if (!ensureGilEnabled()) {
-    return nullptr;
-  }
-  const NajaPythonRuntimeAPI *api = nullptr;
-  if (!getRuntimeAPI(api)) {
-    return nullptr;
-  }
-
-  PyObject *suppliedArguments = nullptr;
-  if (!PyArg_ParseTuple(args, "O:run", &suppliedArguments)) {
-    return nullptr;
-  }
-
-  try {
-    if (PyUnicode_Check(suppliedArguments) ||
-        PyBytes_Check(suppliedArguments) ||
-        PyByteArray_Check(suppliedArguments)) {
-      PyErr_SetString(
-          PyExc_TypeError,
-          "run() expects a sequence of arguments, not a single path");
-      return nullptr;
-    }
-    OwnedPyObject sequence(
-        PySequence_Fast(suppliedArguments,
-                        "run() expects a sequence of command-line arguments"));
-    if (sequence == nullptr) {
-      return nullptr;
-    }
-    const Py_ssize_t count = PySequence_Fast_GET_SIZE(sequence.get());
-    if (count >= INT_MAX) {
-      PyErr_SetString(PyExc_OverflowError, "too many Kepler Formal arguments");
-      return nullptr;
-    }
-
-    std::vector<std::string> argumentStorage;
-    argumentStorage.reserve(static_cast<size_t>(count) + 1);
-    argumentStorage.emplace_back("kepler-formal-python");
-    PyObject **items = PySequence_Fast_ITEMS(sequence.get());
-    for (Py_ssize_t i = 0; i < count; ++i) {
-      if (!appendArgument(items[i], argumentStorage)) {
-        return nullptr;
-      }
-    }
-
-    std::vector<char *> argv;
-    argv.reserve(argumentStorage.size());
-    for (auto &argument : argumentStorage) {
-      argv.push_back(argument.data());
-    }
-
-    KEPLER_FORMAL::RunResult result;
-    KEPLER_FORMAL::runPythonVerification(
-        static_cast<int>(argv.size()), argv.data(), result);
-    return resultToDictionary(result);
-  } catch (const std::exception &error) {
-    PyErr_SetString(PyExc_RuntimeError, error.what());
-    return nullptr;
-  } catch (...) {
-    PyErr_SetString(PyExc_RuntimeError, "unknown native Kepler Formal failure");
-    return nullptr;
-  }
-}
 
 PyObject *version(PyObject *, PyObject *) {
   return PyUnicode_FromString(KEPLER_FORMAL_VERSION);
@@ -597,8 +506,6 @@ PyObject *gitHash(PyObject *, PyObject *) {
 }
 
 PyMethodDef methods[] = {
-    {"run", run, METH_VARARGS,
-     "Run Kepler Formal in process and return an owning result dictionary."},
     {"from_najaeda", fromNajaeda, METH_VARARGS,
      "Capture a live NajaEDA SNLDesign without copying its native netlist."},
     {"verify_designs", verifyDesigns, METH_VARARGS,

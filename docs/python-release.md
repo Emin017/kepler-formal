@@ -10,6 +10,13 @@ run `tools/release.sh` for a Python-only release: `v*` tags also trigger the
 standalone binary release workflow. The manual Python workflow creates no
 tags or GitHub Releases and does not publish the MCP add-on.
 
+The Python package verifies live NajaEDA netlists with `verify_designs()`.
+NajaEDA owns file loading and the caller owns the netlists' lifetime; Kepler
+does not delete them after verification. The Python `verify()`, `run_cli()`,
+and `python -m kepler_formal` entrypoints are removed. Use NajaEDA to load
+designs before calling the Python API, or the standalone binary for file/YAML
+workflows.
+
 ## One-time setup
 
 Complete these account-side settings before requesting a publication. Merely
@@ -102,6 +109,10 @@ platform artifact. A Naja update that changes its matrix requires an explicit
 corresponding update here. Every wheel runs the package tests and native
 dependency/shared-runtime checks after repair. Windows reuses Naja's pregenerated
 parser and vcpkg dependency approach, with KF-owned solver compatibility code.
+The wheel smoke test loads designs through NajaEDA, verifies equivalent and
+different pairs with all three solvers, and checks that the caller's designs
+and selected top survive repeated verification and native errors. KF's Python
+extension contains no Verilog file-loading frontend.
 
 This workflow publishes wheels only, not a source distribution. Intel macOS,
 musllinux, and Windows ARM64 wheels are not in NajaEDA's referenced matrix and

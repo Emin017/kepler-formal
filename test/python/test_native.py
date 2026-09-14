@@ -30,7 +30,7 @@ from kepler_formal import _native
 
 assert not sys._is_gil_enabled(), "PYTHON_GIL=0 was not honored"
 try:
-    _native.run(["--help"])
+    _native.verify_designs(None, None, {})
 except RuntimeError as error:
     assert "requires Python's GIL" in str(error), str(error)
 else:
@@ -45,18 +45,18 @@ else:
         )
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
-    def test_help(self):
-        result = _native.run(["--help"])
-        self.assertEqual(0, result["exit_code"])
-        self.assertEqual("no_result", result["status"])
+    def test_native_api_only_accepts_existing_designs(self):
+        self.assertFalse(hasattr(_native, "run"))
+        with self.assertRaisesRegex(TypeError, "design1 must be a NativeDesign"):
+            _native.verify_designs(None, None, {})
 
-    def test_argument_conversion(self):
-        with self.assertRaises(TypeError):
-            _native.run("--help")
-        with self.assertRaises(ValueError):
-            _native.run(["bad\0argument"])
-        with self.assertRaises(TypeError):
-            _native.run([object()])
+    def test_native_option_conversion(self):
+        with self.assertRaisesRegex(TypeError, "options must be a dict"):
+            _native.verify_designs(None, None, [])
+        with self.assertRaisesRegex(ValueError, "cannot contain NUL"):
+            _native.verify_designs(None, None, {"mode": "lec\0"})
+        with self.assertRaisesRegex(TypeError, "unknown.*option"):
+            _native.verify_designs(None, None, {"verilog": "design.v"})
 
 
 if __name__ == "__main__":

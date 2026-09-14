@@ -12,7 +12,6 @@
 
 #include "KeplerFormalDriver.h"
 #include "NLUniverse.h"
-#include "PythonDriver.h"
 
 namespace {
 
@@ -77,11 +76,13 @@ TEST_F(DriverSeparationTests, SharedRunUsesEachDriversPrimitivePolicy) {
   EXPECT_EQ(KEPLER_FORMAL::RunStatus::Equivalent, run(runHost).status);
   EXPECT_TRUE(host.loaded);
 
-  const auto python = run(KEPLER_FORMAL::runPythonVerification);
-  EXPECT_EQ(KEPLER_FORMAL::RunStatus::Error, python.status);
-  EXPECT_NE(std::string::npos, python.reason.find("in-process Python API"));
+  const auto defaultHost = run([](int argc, char** argv, KEPLER_FORMAL::RunResult& result) {
+    return KEPLER_FORMAL::runKeplerFormal(argc, argv, result);
+  });
+  EXPECT_EQ(KEPLER_FORMAL::RunStatus::Error, defaultHost.status);
+  EXPECT_NE(std::string::npos, defaultHost.reason.find("in-process file API"));
 
-  // The Python rejection must not affect a following call from another host.
+  // One host's rejection must not affect a following call from another host.
   EXPECT_EQ(KEPLER_FORMAL::RunStatus::Equivalent, run(runHost).status);
 }
 

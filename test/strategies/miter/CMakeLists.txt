@@ -33,7 +33,6 @@ target_include_directories(keplerFormalCliTests PRIVATE ${CMAKE_SOURCE_DIR}/src/
 
 target_link_libraries(keplerFormalCliTests
     kepler_formal_driver
-    kepler_formal_python_driver
     kepler_config
     kepler_sec
     naja_snl_pyloader

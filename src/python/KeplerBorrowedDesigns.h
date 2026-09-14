@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "KeplerFormalDriver.h"
+#include "RunResult.h"
 #include "Config.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 

@@ -1,8 +1,6 @@
 # Copyright 2024-2026 keplertech.io
 # SPDX-License-Identifier: GPL-3.0-only
 
-from collections.abc import Sequence
-from os import PathLike
 from typing import Mapping, TypedDict
 
 
@@ -29,7 +27,6 @@ class NativeDesign:
     def najaeda_design(self) -> object: ...
 
 
-def run(arguments: Sequence[str | PathLike[str]]) -> NativeResult: ...
 def from_najaeda(design: object, source: object = ...) -> NativeDesign: ...
 def verify_designs(
     design1: NativeDesign,

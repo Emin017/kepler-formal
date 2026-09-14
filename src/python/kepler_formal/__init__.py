@@ -69,8 +69,6 @@ if not any(
 
 from ._version import git_hash, version
 from .api import (
-    Design,
-    InputFormat,
     NativeDesign,
     SecEncoding,
     SecEngine,
@@ -78,9 +76,6 @@ from .api import (
     VerificationMode,
     VerificationOptions,
     from_najaeda,
-    run_cli,
-    run_config,
-    verify,
     verify_designs,
 )
 from .result import VerificationResult, VerificationStatus
@@ -88,8 +83,6 @@ from .result import VerificationResult, VerificationStatus
 __version__ = version()
 
 __all__ = [
-    "Design",
-    "InputFormat",
     "NativeDesign",
     "SecEncoding",
     "SecEngine",
@@ -101,9 +94,6 @@ __all__ = [
     "from_najaeda",
     "git_hash",
     "najaeda",
-    "run_cli",
-    "run_config",
-    "verify",
     "verify_designs",
     "version",
     "__version__",

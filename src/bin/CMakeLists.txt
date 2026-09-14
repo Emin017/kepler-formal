@@ -1,7 +1,19 @@
 # Copyright 2024-2026 keplertech.io
 # SPDX-License-Identifier: GPL-3.0-only
 
+# Result formatting and reports are shared without pulling in file loaders.
+add_library(kepler_verification_support STATIC RunResult.cpp KeplerFormalUtils.cpp)
+target_include_directories(kepler_verification_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(kepler_verification_support PUBLIC kepler_config kepler_sec)
+
+if(BUILD_KEPLER_PYTHON)
+  # Python borrows designs loaded by NajaEDA. Do not compile the file driver
+  # or introduce its parser dependencies into the extension.
+  return()
+endif()
+
 set(KEPLER_FORMAL_DRIVER_LIBRARIES
+    kepler_verification_support
     kepler_config
     kepler_sec
     naja_dnl
@@ -26,19 +38,6 @@ endfunction()
 
 add_library(kepler_formal_core STATIC KeplerFormal.cpp Btor2ExportConfig.cpp)
 configure_kepler_formal_driver(kepler_formal_core)
-
-# Both adapters call the same core. Only the standalone adapter links the
-# embedded Python primitive loader; the Python adapter runs in its host runtime.
-add_library(kepler_formal_python_driver STATIC ../python/PythonDriver.cpp)
-target_link_libraries(kepler_formal_python_driver PUBLIC kepler_formal_core)
-target_include_directories(kepler_formal_python_driver PUBLIC
-  ${PROJECT_SOURCE_DIR}/src/python)
-
-if(BUILD_KEPLER_PYTHON)
-  # Build the standalone executable in a separate, ordinary CMake build. It
-  # must not acquire a runtime dependency on an installed NajaEDA wheel.
-  return()
-endif()
 
 add_library(kepler_formal_driver STATIC CppDriver.cpp)
 target_link_libraries(kepler_formal_driver PUBLIC kepler_formal_core naja_snl_pyloader)
