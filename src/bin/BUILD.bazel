@@ -27,6 +27,10 @@ cc_binary(
     name = "kepler-formal",
     srcs = [
         "KeplerFormal.cpp",
+        "Btor2ExportConfig.cpp",
+        "Btor2ExportConfig.h",
+        "KeplerFormalDriver.h",
+        "KeplerFormalMain.cpp",
         "KeplerFormalUtils.h",
     ],
     copts = NAJA_HEADER_COPTS,
