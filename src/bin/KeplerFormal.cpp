@@ -22,6 +22,8 @@
 #include <yaml-cpp/yaml.h>
 
 #include "NajaPerf.h"
+#include "NajaVersion.h"
+#include "KeplerVersion.h"
 
 // Naja interfaces
 #include "DNL.h"
@@ -113,7 +115,7 @@ static void addNajaPythonPath(const char* argv0) {
 static void print_usage(const char* prog) {
   SPDLOG_INFO(
   // LCOV_EXCL_STOP
-      "Usage: {} [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v> "
+      "Usage: {} --version | [--config <file>] | <-naja_if/-verilog/-systemverilog/-sv/-sv2v> "
       "[-v <lec|sec>] [-k <max-k>] [--sec-engine <k_induction|imc|pdr>] [--sec-encoding <binary|dual_rail_steady>] "
       "[--verilog_design1_top <name>] [--verilog_design2_top <name>] "
       "<netlist1> <netlist2> [<library-file>...] | "
@@ -1170,6 +1172,14 @@ static KEPLER_FORMAL::MiterStrategy::CompactSnapshot captureCompactSnapshot(
 // LCOV_EXCL_STOP
 
 int KeplerFormalMain(int argc, char** argv) {
+  if (argc == 2 && (std::string_view(argv[1]) == "--version" ||
+                    std::string_view(argv[1]) == "-V")) {
+    std::cout << "kepler-formal version: " << KEPLER_FORMAL::KEPLER_VERSION << '\n'
+              << "kepler-formal git hash: " << KEPLER_FORMAL::KEPLER_GIT_HASH << '\n'
+              << "naja version: " << naja::NAJA_VERSION << '\n'
+              << "naja git hash: " << naja::NAJA_GIT_HASH << '\n';
+    return EXIT_SUCCESS;
+  }
   using namespace std::chrono;
   enum class FormatType { VERILOG, SYSTEMVERILOG, SV2V, NAJA_IF };
   constexpr size_t kDefaultSecMaxK = 32;

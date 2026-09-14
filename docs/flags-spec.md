@@ -35,6 +35,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `-systemverilog`, `-sv` | Use SystemVerilog format for both designs. Requires SEC verification. |
 | `-sv2v` | Use mixed SystemVerilog-to-Verilog format for SEC RTL-vs-gate comparison: design 1 is parsed as SystemVerilog, design 2 is parsed as Verilog. |
 | `--help`, `-h` | Print usage and exit. |
+| `--version`, `-V` | Print the embedded Kepler Formal and Naja versions and Git hashes to stdout and exit successfully. Use as a standalone option. |
 | `--config <file>`, `-c <file>` | Load a YAML config file. If present anywhere on the CLI, YAML parsing takes precedence over the rest of the arguments. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |

@@ -3,6 +3,10 @@
 
 include(GoogleTest)
 
+add_test(NAME VersionCliTest
+  COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/VersionCliTest.sh"
+    $<TARGET_FILE:kepler-formal>)
+
 add_subdirectory(unit_designs)
 add_subdirectory(strategies)
 add_subdirectory(utils)
