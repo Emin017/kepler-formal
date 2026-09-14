@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "KeplerBorrowedDesigns.h"
-#include "KeplerFormalDriver.h"
+#include "PythonDriver.h"
 #include "NajaPythonRuntimeAPI.h"
 #include "NajaRuntimeBuild.h"
 #include "NLUniverse.h"
@@ -576,9 +576,8 @@ PyObject *run(PyObject *, PyObject *args) {
     }
 
     KEPLER_FORMAL::RunResult result;
-    KEPLER_FORMAL::Config::ScopedVerificationContext verificationContext;
-    KEPLER_FORMAL::runKeplerFormal(static_cast<int>(argv.size()), argv.data(),
-                                   result);
+    KEPLER_FORMAL::runPythonVerification(
+        static_cast<int>(argv.size()), argv.data(), result);
     return resultToDictionary(result);
   } catch (const std::exception &error) {
     PyErr_SetString(PyExc_RuntimeError, error.what());

@@ -34,6 +34,12 @@ isolated `pip install .` builds can resolve the provider from the package index.
 executable separately with `BUILD_KEPLER_PYTHON=OFF`; it continues to use the
 vendored Naja and does not depend on an installed NajaEDA package.
 
+The thin native adapters are `src/bin/CppDriver.cpp` and
+`src/python/PythonDriver.cpp`. They share the run API, parser, verification
+workflow, and result handling in `src/bin/KeplerFormal.cpp`. The standalone
+adapter supplies Python primitive loading; the in-process adapter rejects it.
+The shared core has no frontend-specific compilation flags.
+
 The build uses `scikit-build-core`, following NajaEDA's package layout. Native
 build dependencies are the same as for the CMake build. The wheel matrix covers
 Linux x86_64/aarch64, macOS arm64, and Windows AMD64; see the exact Python
