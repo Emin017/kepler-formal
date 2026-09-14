@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright 2024-2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 #
 # Create a release tag and push it to trigger the CI release workflow.
 # Usage: bazelisk run //:release

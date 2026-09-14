@@ -1,5 +1,5 @@
 # Copyright 2024-2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 set(KEPLER_FORMAL_DRIVER_LIBRARIES
     kepler_config

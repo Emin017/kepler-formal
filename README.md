@@ -245,6 +245,12 @@ verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 
 See the organized [examples](examples).
 
+## License
+
+Except where otherwise noted, Kepler Formal is licensed under the
+[Apache License, Version 2.0](LICENSE.rst). Third-party components and example
+inputs retain their respective licenses and notices.
+
 ## Contact
 
 contact@keplertech.io
