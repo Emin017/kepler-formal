@@ -29,8 +29,8 @@ stdenv.mkDerivation {
   pname = "kepler-formal";
   version = builtins.head (
     builtins.match
-      ".*project\\(kepler-formal[[:space:]]+VERSION[[:space:]]+([0-9]+\\.[0-9]+\\.[0-9]+).*"
-      (builtins.readFile "${src}/CMakeLists.txt")
+      ''.*KEPLER_VERSION[[:space:]]*\{[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)".*''
+      (builtins.readFile "${src}/src/bin/KeplerVersion.h.in")
   );
   inherit src;
 

@@ -159,6 +159,19 @@ or runtime errors are execution failures rather than SEC verdicts.
 
 ### Binary Flags
 
+Report the versions and Git revisions embedded in the executable:
+
+```bash
+kepler-formal --version
+```
+
+The command needs no configuration or netlists. Hashes describe the sources
+used to build the executable. Kepler uses `unknown` when Git metadata is
+unavailable; CMake source-archive builds can supply `-DKEPLER_GIT_HASH=<hash>`.
+The project version is defined in `src/bin/KeplerVersion.h.in`. CMake reads
+it for its project metadata; Bazel generates the CLI include directly from
+that template. Release checks keep Bazel and MCP package versions in sync.
+
 ```bash
 # Single file per design
 build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v> [options] \
@@ -179,6 +192,7 @@ build/src/bin/kepler-formal -sv -v sec \
 | Flag | Meaning |
 | --- | --- |
 | `--help`, `-h` | Print usage. |
+| `--version`, `-V` | Print Kepler Formal and Naja versions and build Git hashes, then exit. |
 | `--config <file>`, `-c <file>` | Load a YAML config. Config mode cannot be combined with other CLI options. |
 | `--verification <lec\|sec>`, `-v <lec\|sec>` | Select combinational LEC or sequential SEC. Defaults to `lec`. |
 | `--dump-btor2 <file>` | Export the prepared SEC equivalence problem as BTOR2 before solving. |

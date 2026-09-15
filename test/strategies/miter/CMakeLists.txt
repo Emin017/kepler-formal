@@ -34,6 +34,7 @@ target_compile_definitions(keplerFormalCliTests PRIVATE KEPLER_FORMAL_NO_MAIN)
 target_include_directories(keplerFormalCliTests PRIVATE ${CMAKE_SOURCE_DIR}/src/bin)
 
 target_link_libraries(keplerFormalCliTests
+    kepler_version
     kepler_config
     kepler_sec
     naja_snl_pyloader
