@@ -1,5 +1,5 @@
 # Copyright 2024-2025 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 if(NOT BUILD_KEPLER_PYTHON)
   add_subdirectory(naja)

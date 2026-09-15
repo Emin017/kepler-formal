@@ -1,5 +1,20 @@
 # Copyright 2024-2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
+
+set(kepler_version_header "${CMAKE_CURRENT_BINARY_DIR}/KeplerVersion.h")
+set(KEPLER_GIT_HASH "unknown" CACHE STRING "Kepler Git hash for source archives")
+add_custom_target(kepler_version_header
+  COMMAND ${CMAKE_COMMAND}
+    "-DKEPLER_GIT_HASH=${KEPLER_GIT_HASH}"
+    "-DKEPLER_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DKEPLER_VERSION_HEADER=${kepler_version_header}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/KeplerVersion.cmake"
+  BYPRODUCTS "${kepler_version_header}"
+  VERBATIM
+)
+add_library(kepler_version INTERFACE)
+add_dependencies(kepler_version kepler_version_header)
+target_include_directories(kepler_version INTERFACE "${CMAKE_CURRENT_BINARY_DIR}")
 
 # Result formatting and reports are shared without pulling in file loaders.
 add_library(kepler_verification_support STATIC RunResult.cpp KeplerFormalUtils.cpp)
@@ -14,6 +29,7 @@ endif()
 
 set(KEPLER_FORMAL_DRIVER_LIBRARIES
     kepler_verification_support
+    kepler_version
     kepler_config
     kepler_sec
     naja_dnl

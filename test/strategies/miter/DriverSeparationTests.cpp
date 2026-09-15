@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -99,6 +100,34 @@ TEST_F(DriverSeparationTests, PreparationFailureLeavesTheSharedRunReusable) {
 
   host.reject = false;
   EXPECT_EQ(KEPLER_FORMAL::RunStatus::Equivalent, run(runHost).status);
+}
+
+TEST_F(DriverSeparationTests, VersionRequestReturnsNoResultWithoutLoading) {
+  HostPrimitiveLoader host;
+  host.reject = true;
+  for (const auto* flag : {"--version", "-V"}) {
+    std::vector<std::string> arguments = {"kepler-formal", flag};
+    std::vector<char*> argv;
+    for (auto& argument : arguments) argv.push_back(argument.data());
+    KEPLER_FORMAL::RunResult result;
+    result.status = KEPLER_FORMAL::RunStatus::Equivalent;
+    result.reason = "previous verification";
+    result.bound = 10;
+
+    testing::internal::CaptureStdout();
+    const int code = KEPLER_FORMAL::runKeplerFormal(
+        static_cast<int>(argv.size()), argv.data(), result, host);
+    const auto output = testing::internal::GetCapturedStdout();
+
+    EXPECT_EQ(EXIT_SUCCESS, code);
+    EXPECT_EQ(code, result.exitCode);
+    EXPECT_EQ(KEPLER_FORMAL::RunStatus::NoResult, result.status);
+    EXPECT_TRUE(result.reason.empty());
+    EXPECT_EQ(0, result.bound);
+    EXPECT_EQ(0, output.find("kepler-formal version: "));
+    EXPECT_FALSE(host.loaded);
+    EXPECT_EQ(nullptr, naja::NL::NLUniverse::get());
+  }
 }
 
 }  // namespace
