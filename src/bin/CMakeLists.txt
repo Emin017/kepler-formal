@@ -1,5 +1,5 @@
 # Copyright 2024-2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 set(kepler_version_header "${CMAKE_CURRENT_BINARY_DIR}/KeplerVersion.h")
 set(KEPLER_GIT_HASH "unknown" CACHE STRING "Kepler Git hash for source archives")
