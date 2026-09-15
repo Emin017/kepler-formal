@@ -10,14 +10,18 @@ file(STRINGS "${KISSAT_ROOT}/VERSION" KEPLER_KISSAT_VERSION LIMIT_COUNT 1)
 configure_file("${CMAKE_CURRENT_LIST_DIR}/kissat-build.h.in"
   "${kepler_solver_generated}/build.h" @ONLY)
 
-file(GLOB kissat_sources CONFIGURE_DEPENDS "${KISSAT_ROOT}/src/*.c")
+include("${CMAKE_CURRENT_LIST_DIR}/PrepareKissatForWindows.cmake")
+set(kepler_kissat_source "${kepler_solver_generated}/kissat")
+kepler_prepare_kissat_for_windows("${KISSAT_ROOT}/src" "${kepler_kissat_source}")
+file(GLOB kissat_sources CONFIGURE_DEPENDS "${kepler_kissat_source}/*.c")
 foreach(application IN ITEMS main application handle parse witness)
-  list(REMOVE_ITEM kissat_sources "${KISSAT_ROOT}/src/${application}.c")
+  list(REMOVE_ITEM kissat_sources "${kepler_kissat_source}/${application}.c")
 endforeach()
-add_library(kissat STATIC ${kissat_sources})
+add_library(kissat STATIC ${kissat_sources}
+  "${CMAKE_CURRENT_LIST_DIR}/KissatLayoutChecks.c")
 set_target_properties(kissat PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
 target_include_directories(kissat PRIVATE
-  "${kepler_solver_compat}" "${kepler_solver_generated}")
+  "${kepler_solver_compat}" "${kepler_solver_generated}" "${kepler_kissat_source}")
 # Match the existing --compact --quiet --no-proofs build; do not use NOPTIONS,
 # since Kepler's SEC strategies must still select solver profiles at runtime.
 target_compile_definitions(kissat PRIVATE COMPACT QUIET NPROOFS NDEBUG)
