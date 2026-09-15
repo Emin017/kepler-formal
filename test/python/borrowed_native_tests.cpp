@@ -1,6 +1,7 @@
 // Copyright 2024-2026 keplertech.io
 // SPDX-License-Identifier: GPL-3.0-only
 
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -23,6 +24,7 @@
 #include "SNLScalarNet.h"
 #include "SNLScalarTerm.h"
 #include "Tree2BoolExpr.h"
+#include <spdlog/sinks/null_sink.h>
 #include <spdlog/spdlog.h>
 
 using namespace KEPLER_FORMAL;
@@ -34,6 +36,13 @@ void check(bool condition, const std::string& message) {
   if (!condition) {
     throw std::runtime_error(message);
   }
+}
+
+void checkLogReleased(const std::string& path) {
+  std::error_code error;
+  const bool removed = std::filesystem::remove(path, error);
+  check(removed && !error,
+        "verification log could not be removed immediately: " + path + ": " + error.message());
 }
 
 SNLDesign* makeWire(NLLibrary* library, const std::string& name,
@@ -149,6 +158,9 @@ void runTests() {
   Config::setSolverType(Config::SolverType::CADICAL);
   Config::setReportSkippedPOs(true);
   auto savedLogger = spdlog::default_logger();
+  constexpr auto borrowedLoggerName = "kepler_formal_borrowed_logger";
+  auto savedBorrowedLogger = spdlog::get(borrowedLoggerName);
+  check(!savedBorrowedLogger, "test started with a registered borrowed logger");
 
   // DNL assigns these metadata fields while traversing the borrowed graphs.
   auto* firstInput = first->getScalarTerm(NLName("I"));
@@ -179,6 +191,8 @@ void runTests() {
     check(Config::getSolverType() == Config::SolverType::CADICAL &&
               Config::getReportSkippedPOs(), "caller configuration changed");
     check(spdlog::default_logger() == savedLogger, "caller logger changed");
+    check(spdlog::get(borrowedLoggerName) == savedBorrowedLogger,
+          "borrowed logger registry entry was not restored");
     check(Config::getVerificationGeneration() == 0, "caller cache generation changed");
   };
 
@@ -212,6 +226,8 @@ void runTests() {
             result.totalOutputs == 2 && result.provenOutputs == 2,
         "equivalent SEC verdict/counts changed: " + result.reason);
   checkState();
+  // Windows cannot remove this file while the temporary logger retains its sink.
+  checkLogReleased(options.logFile);
   mutableSecond.second->setValue("2'h1");
   check(verifyBorrowedDesigns(mutableFirst.first, mutableSecond.first, options, result) == 3 &&
             result.status == RunStatus::Different,
@@ -257,6 +273,42 @@ void runTests() {
       checkState();
     }
   }
+
+  // Embedders may already use the same logger name, either independently or as
+  // their default logger. Both its registration and object must survive calls.
+  const auto originalDefaultLogger = savedLogger;
+  savedBorrowedLogger = spdlog::null_logger_mt(borrowedLoggerName);
+  savedBorrowedLogger->set_level(spdlog::level::warn);
+  mutableSecond.second->setValue("2'h2");
+  for (bool useAsDefault : {false, true}) {
+    if (useAsDefault) {
+      savedLogger = savedBorrowedLogger;
+      spdlog::set_default_logger(savedLogger);
+    }
+    options.mode = BorrowedVerificationMode::LEC;
+    check(verifyBorrowedDesigns(first, second, options, result) == 0 &&
+              result.status == RunStatus::Equivalent,
+          "LEC with a caller-owned named logger failed: " + result.reason);
+    checkState();
+    options.mode = BorrowedVerificationMode::SEC;
+    check(verifyBorrowedDesigns(mutableFirst.first, mutableSecond.first, options, result) == 0 &&
+              result.status == RunStatus::Equivalent,
+          "SEC with a caller-owned named logger failed: " + result.reason);
+    checkState();
+    checkLogReleased(options.logFile);
+    options.mode = BorrowedVerificationMode::LEC;
+    check(verifyBorrowedDesigns(first, mismatch, options, result) == 1 &&
+              result.status == RunStatus::Error,
+          "boundary error with a caller-owned named logger was lost");
+    checkState();
+    check(savedBorrowedLogger->level() == spdlog::level::warn,
+          "caller-owned named logger settings changed");
+  }
+  savedLogger = originalDefaultLogger;
+  spdlog::set_default_logger(savedLogger);
+  spdlog::drop(borrowedLoggerName);
+  savedBorrowedLogger.reset();
+  checkState();
 
   // A universe with no top and no DNL is valid; restoring it must not call
   // NLUniverse::setTopDesign(nullptr), which dereferences its argument.

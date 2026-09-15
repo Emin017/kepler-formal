@@ -111,6 +111,7 @@ class BorrowedRunState {
       : solver_(Config::getSolverType()),
         reportSkipped_(Config::getReportSkippedPOs()),
         defaultLogger_(spdlog::default_logger()),
+        borrowedLogger_(spdlog::get("kepler_formal_borrowed_logger")),
         miterLogger_(spdlog::get("miter_logger")),
         fallbackLogger_(spdlog::get("miter_logger_fallback")),
         miterLogFile_(MiterStrategy::logFileName_) {}
@@ -122,6 +123,9 @@ class BorrowedRunState {
     Config::setReportSkippedPOs(reportSkipped_);
     restoreLogger("miter_logger", miterLogger_);
     restoreLogger("miter_logger_fallback", fallbackLogger_);
+    // set_default_logger also registers its logger by name. Restoring only
+    // the default pointer would retain our file sink and lock its log on Windows.
+    restoreLogger("kepler_formal_borrowed_logger", borrowedLogger_);
     spdlog::set_default_logger(defaultLogger_);
   }
 
@@ -139,6 +143,7 @@ class BorrowedRunState {
   Config::SolverType solver_;
   bool reportSkipped_;
   std::shared_ptr<spdlog::logger> defaultLogger_;
+  std::shared_ptr<spdlog::logger> borrowedLogger_;
   std::shared_ptr<spdlog::logger> miterLogger_;
   std::shared_ptr<spdlog::logger> fallbackLogger_;
   std::string miterLogFile_;
