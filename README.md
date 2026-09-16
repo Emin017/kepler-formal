@@ -159,19 +159,6 @@ or runtime errors are execution failures rather than SEC verdicts.
 
 ### Binary Flags
 
-Report the versions and Git revisions embedded in the executable:
-
-```bash
-kepler-formal --version
-```
-
-The command needs no configuration or netlists. Hashes describe the sources
-used to build the executable. Kepler uses `unknown` when Git metadata is
-unavailable; CMake source-archive builds can supply `-DKEPLER_GIT_HASH=<hash>`.
-The project version is defined in `src/bin/KeplerVersion.h.in`. CMake reads
-it for its project metadata; Bazel generates the CLI include directly from
-that template. Release checks keep Bazel and MCP package versions in sync.
-
 ```bash
 # Single file per design
 build/src/bin/kepler-formal <-verilog/-naja_if/-systemverilog/-sv/-sv2v> [options] \
@@ -254,24 +241,6 @@ py_tech_files:
   - primitives.py             # Optional: Python tech loaders are YAML-only
 verilog_preprocessing: true   # Optional: enables Verilog preprocessor
 ```
-
-## Python API
-
-NajaEDA loads or creates the netlists; Kepler verifies the existing designs in
-memory through `verify_designs()`:
-
-```python
-from kepler_formal import verify_designs
-
-# reference and implementation are live NajaEDA SNLDesign objects.
-result = verify_designs(reference, implementation)
-print(result.status)
-```
-
-The caller retains ownership of both designs and can edit and verify them
-again. YAML/configuration and file loading remain available in the standalone
-executable. See the [Python API](docs/python-api.md) for NajaEDA loading examples,
-installation, and options.
 
 ## Examples 
 
