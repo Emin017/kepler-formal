@@ -184,6 +184,11 @@ void appendNetReport(std::ostream& out, const SNLBitNet* net) {
       << " is_constant1=" << (net->isConstant1() ? "true" : "false")
       << " model_is_assign=" << (net->getDesign()->isAssign() ? "true" : "false")
       << " properties=[";
+#ifdef KEPLER_NAJA_PROPERTIES_UNAVAILABLE
+  // NajaEDA 0.7.24's Windows wheel does not export getProperties(). Keep
+  // the remaining net diagnostics and distinguish unavailable from empty.
+  out << "unavailable";
+#else
   bool first = true;
   for (auto* property : net->getProperties()) {
     if (!first) {
@@ -192,6 +197,7 @@ void appendNetReport(std::ostream& out, const SNLBitNet* net) {
     first = false;
     out << property->getName() << "=" << property->getString();
   }
+#endif
   out << "]";
 }
 
