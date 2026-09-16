@@ -28,11 +28,13 @@ python -m pip install --no-build-isolation ./thirdparty/naja
 python -m pip install --no-build-isolation .
 ```
 
-Default wheel CI builds and installs a separate local provider wheel for every
+Default wheel CI runs on relevant pull requests, pushes to `main`, `v*` tags, and manual
+runs. It builds and installs a separate local provider wheel for every
 Python/platform combination. Only a manual `publish` request adds a second,
 parallel set of jobs against published NajaEDA `0.7.24` wheels through KF's
-version-specific compatibility adapter. Both provider sets must pass before
-publication; only wheels tested against the published provider are uploaded.
+version-specific compatibility adapter. Only published-provider jobs must
+pass for publication; development-provider jobs remain independent regression
+checks. Only wheels tested against the published provider are uploaded.
 The adapter obtains matching release headers, links the installed native
 libraries, and checks their identity before sharing designs. Those wheels
 require `najaeda==0.7.24`, which pip installs normally. There is no separate
