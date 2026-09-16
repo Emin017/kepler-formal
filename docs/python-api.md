@@ -29,12 +29,14 @@ python -m pip install --no-build-isolation .
 ```
 
 Default wheel CI builds and installs a separate local provider wheel for every
-Python/platform combination. The optional `published_najaeda` workflow switch
-instead selects the unmodified published NajaEDA `0.7.24` wheels through KF's
-version-specific compatibility adapter. It obtains matching release headers,
-links the installed native libraries, and checks their identity before sharing
-designs. The switch is off by default; see [release instructions](python-release.md).
-Wheels built in this mode require `najaeda==0.7.24`, which pip installs normally.
+Python/platform combination. Only a manual `publish` request adds a second,
+parallel set of jobs against published NajaEDA `0.7.24` wheels through KF's
+version-specific compatibility adapter. Both provider sets must pass before
+publication; only wheels tested against the published provider are uploaded.
+The adapter obtains matching release headers, links the installed native
+libraries, and checks their identity before sharing designs. Those wheels
+require `najaeda==0.7.24`, which pip installs normally. There is no separate
+provider checkbox; see [release instructions](python-release.md).
 
 `BUILD_KEPLER_PYTHON=ON` is a Python-only CMake build. Build the standalone
 executable separately with `BUILD_KEPLER_PYTHON=OFF`; it continues to use the
@@ -62,10 +64,10 @@ Maintainers can publish tested wheels using the manual
 ## Shared NajaEDA runtime
 
 `najaeda` is a runtime dependency of `kepler_formal` and is imported before
-Kepler's native extension. It initializes the Naja runtime and publishes a
-versioned native API that Kepler validates at import and before each live-design
-call. A mismatched build, ABI, or runtime identity fails explicitly instead of
-passing objects across an unsafe binary boundary.
+Kepler's native extension. Development builds use its versioned native API to
+check build and runtime identity. The published-provider adapter instead checks
+the pinned release's native-file fingerprints, exported Python types, and live
+universe identity. Both paths reject mismatches before accepting live designs.
 
 For compatibility, `kepler_formal.najaeda` and all of its submodules are
 aliases to the original package:

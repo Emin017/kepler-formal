@@ -49,7 +49,7 @@ class PythonReleaseTest(unittest.TestCase):
 
     def _validate(self, **changes):
         request = dict(repository="keplertech/kepler-formal", ref="refs/heads/main",
-                       confirmed_version="0.5.0", published_najaeda=True)
+                       confirmed_version="0.5.0")
         request.update(changes)
         return release.validate_release(self.project, **request)
 
@@ -117,7 +117,7 @@ class PythonReleaseTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "KEPLER_USE_PUBLISHED_NAJAEDA=ON"):
             self._validate()
 
-    def test_release_rejects_fork_branch_tag_wrong_version_and_missing_opt_in(self):
+    def test_release_rejects_fork_branch_tag_and_wrong_version(self):
         release.prepare_project(self.project, published_najaeda=True)
         for changes, message in (
             ({"repository": "nanocoh/kepler-formal"}, "only allowed"),
@@ -125,7 +125,6 @@ class PythonReleaseTest(unittest.TestCase):
             ({"ref": "refs/tags/v0.5.0"}, "only allowed"),
             ({"confirmed_version": ""}, "confirm version 0.5.0"),
             ({"confirmed_version": "1.0.0"}, "confirm version 0.5.0"),
-            ({"published_najaeda": False}, "published_najaeda"),
         ):
             with self.subTest(changes=changes):
                 with self.assertRaisesRegex(ValueError, message):

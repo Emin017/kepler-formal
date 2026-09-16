@@ -6,11 +6,6 @@ name: Python wheels
 on:
   workflow_dispatch:
     inputs:
-      published_najaeda:
-        description: Build against published NajaEDA 0.7.24 instead of the local development provider
-        type: boolean
-        required: false
-        default: false
       publish:
         description: Publish tested wheels to PyPI (main only; requires pypi environment approval)
         type: boolean
@@ -74,11 +69,15 @@ jobs:
           if-no-files-found: error
 
   build:
-    name: ${{ matrix.platform }} / ${{ matrix.arch }}
+    name: ${{ matrix.provider }} / ${{ matrix.platform }} / ${{ matrix.arch }}
     needs: generate-parser
     strategy:
       fail-fast: false
       matrix:
+        # Release requests test the published provider alongside the normal
+        # development provider. Ordinary CI never selects the published path.
+        provider: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.publish && '["development", "published"]' || '["development"]') }}
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
         include:
           - os: ubuntu-24.04
             platform: manylinux_2_28
@@ -96,7 +95,7 @@ jobs:
             arch: AMD64
     runs-on: ${{ matrix.os }}
     env:
-      KEPLER_USE_PUBLISHED_NAJAEDA: ${{ inputs.published_najaeda && '1' || '0' }}
+      KEPLER_USE_PUBLISHED_NAJAEDA: ${{ matrix.provider == 'published' && '1' || '0' }}
       # Linux builds and tests run inside a manylinux container.
       CIBW_ENVIRONMENT_PASS_LINUX: KEPLER_USE_PUBLISHED_NAJAEDA
 
@@ -125,7 +124,7 @@ jobs:
           arch: x64
 
       - name: Validate Python release request
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && matrix.provider == 'published' }}
         shell: bash
         env:
           RELEASE_VERSION: ${{ inputs.version }}
@@ -152,7 +151,7 @@ jobs:
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kepler-formal-${{ matrix.platform }}-${{ matrix.arch }}
+          name: kepler-formal-${{ matrix.provider }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: wheelhouse/*.whl
           if-no-files-found: error
 
@@ -162,7 +161,6 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.publish &&
-      inputs.published_najaeda &&
       github.repository == 'keplertech/kepler-formal' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -175,30 +173,30 @@ jobs:
       contents: read
       id-token: write
     steps:
-      # Download only this run's four tested wheel artifacts. An absent
-      # artifact is an error; never publish a partial platform matrix.
+      # The entire build matrix must pass, including both providers. Upload
+      # only the four published-provider artifacts from this run.
       - name: Download Linux wheels
         uses: actions/download-artifact@v8
         with:
-          name: kepler-formal-manylinux_2_28-x86_64
+          name: kepler-formal-published-manylinux_2_28-x86_64
           path: dist/
 
       - name: Download macOS wheels
         uses: actions/download-artifact@v8
         with:
-          name: kepler-formal-macOS-arm64
+          name: kepler-formal-published-macOS-arm64
           path: dist/
 
       - name: Download Linux ARM64 wheels
         uses: actions/download-artifact@v8
         with:
-          name: kepler-formal-manylinux_2_28-aarch64
+          name: kepler-formal-published-manylinux_2_28-aarch64
           path: dist/
 
       - name: Download Windows wheels
         uses: actions/download-artifact@v8
         with:
-          name: kepler-formal-Windows-AMD64
+          name: kepler-formal-published-Windows-AMD64
           path: dist/
 
       - name: Publish to PyPI using Trusted Publishing

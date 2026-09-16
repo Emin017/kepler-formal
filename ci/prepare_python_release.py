@@ -93,11 +93,9 @@ def prepare_project(project: Path, *, published_najaeda: bool = False) -> None:
 
 
 def validate_release(project: Path, *, repository: str, ref: str,
-                     confirmed_version: str, published_najaeda: bool) -> str:
+                     confirmed_version: str) -> str:
     if repository != "keplertech/kepler-formal" or ref != "refs/heads/main":
         raise ValueError("PyPI publishing is only allowed from keplertech/kepler-formal main")
-    if not published_najaeda:
-        raise ValueError("PyPI publishing requires published_najaeda to be enabled")
     metadata = (project / "pyproject.toml").read_text(encoding="utf-8")
     if _requirements(metadata) != (PUBLISHED_REQUIREMENT,) * 2:
         raise ValueError("Publishing requires matching published NajaEDA build and runtime pins")
@@ -122,7 +120,6 @@ def main() -> None:
             version = validate_release(
                 args.project, repository=os.environ.get("GITHUB_REPOSITORY", ""),
                 ref=os.environ.get("GITHUB_REF", ""), confirmed_version=args.version,
-                published_najaeda=args.published_najaeda,
             )
             summary = f"Release request: kepler-formal {version} from {os.environ.get('GITHUB_SHA', 'unknown')}\n"
             print(summary, end="")
