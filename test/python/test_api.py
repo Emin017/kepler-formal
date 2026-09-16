@@ -1,6 +1,7 @@
 # Copyright 2024-2026 keplertech.io
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -105,6 +106,45 @@ class PythonApiTest(unittest.TestCase):
         self.assertEqual(1, result.total_outputs)
         self.assertEqual(1, result.covered_outputs)
         self.assertEqual(0, result.proven_outputs)
+
+    def test_skipped_net_diagnostics_preserve_borrowed_nets(self):
+        conflicting_nets = []
+        for design in (self.reference, self.equivalent):
+            conflicting = najaeda.naja.SNLScalarNet.create(design, "conflicting_net")
+            for name in ("driver0", "driver1"):
+                driver = najaeda.naja.SNLScalarTerm.create(
+                    design, najaeda.naja.SNLTerm.Direction.Input, name
+                )
+                driver.setNet(conflicting)
+            output = najaeda.naja.SNLScalarTerm.create(
+                design, najaeda.naja.SNLTerm.Direction.Output, "conflicting_output"
+            )
+            output.setNet(conflicting)
+            conflicting_nets.append(conflicting)
+        top_before = self.universe.getTopDesign()
+        previous_directory = Path.cwd()
+        try:
+            os.chdir(self.root)
+            result = verify_designs(
+                self.reference, self.equivalent,
+                options=VerificationOptions(
+                    log_file=self.root / "skipped-nets.log",
+                    report_skipped_outputs=True,
+                ),
+            )
+        finally:
+            os.chdir(previous_directory)
+
+        self.assertEqual(VerificationStatus.EQUIVALENT, result.status)
+        self.assertTrue((self.root / "skipped_multi_driver_pos.txt").is_file())
+        self.assertIs(self.universe.getTopDesign(), top_before)
+        for design, conflicting in zip((self.reference, self.equivalent), conflicting_nets):
+            self.assertEqual("conflicting_net", conflicting.getName())
+            self.assertIs(design.getScalarTerm("conflicting_output").getNet(), conflicting)
+        repeated = verify_designs(
+            self.reference, self.equivalent, options=self._options("after-report.log")
+        )
+        self.assertEqual(VerificationStatus.EQUIVALENT, repeated.status)
 
     def test_validation(self):
         invalid_options = (

@@ -11,6 +11,7 @@
 #include "KeplerBorrowedDesigns.h"
 #include "BoolExpr.h"
 #include "DNL.h"
+#include "MiterStrategy.h"
 #include "NLDB.h"
 #include "NLDB0.h"
 #include "NLLibrary.h"
@@ -195,6 +196,24 @@ void runTests() {
           "borrowed logger registry entry was not restored");
     check(Config::getVerificationGeneration() == 0, "caller cache generation changed");
   };
+
+  // Compact mode owns and destroys its input netlists. Python builds must
+  // reject it before initialization or any mutation of the caller's state.
+  const auto firstReference = first->getReference();
+  const auto secondReference = second->getReference();
+  MiterStrategy compact(first, second);
+  bool compactRejected = false;
+  try {
+    compact.run(true);
+  } catch (const std::invalid_argument& error) {
+    compactRejected = std::string(error.what()).find("borrowed") != std::string::npos;
+  }
+  check(compactRejected, "compact mode accepted borrowed Python designs");
+  check(universe->getSNLDesign(firstReference) == first &&
+            universe->getSNLDesign(secondReference) == second,
+        "rejected compact mode destroyed borrowed designs");
+  checkState();
+  MiterStrategy::cleanupProcessState();
 
   BorrowedDesignOptions options;
   options.logFile = "borrowed_native_lec.log";
