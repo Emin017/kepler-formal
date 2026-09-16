@@ -17,10 +17,10 @@ For local regression without wheels or publishing, use the
 [source regression runner](python-regression.md). It compiles both Python
 packages from this checkout and tests their shared runtime.
 
-This development change requires the matching NajaEDA shared-runtime SDK,
-currently version `0.7.24.dev0` in `thirdparty/naja`. That SDK has not been
-published. Build both packages from this recursive checkout in one virtual
-environment, with the native build dependencies installed:
+The default development build uses the matching NajaEDA shared-runtime SDK,
+version `0.7.24.dev0` in `thirdparty/naja`. Build both packages from this
+recursive checkout in one virtual environment, with the native build
+dependencies installed:
 
 ```bash
 python -m pip install 'scikit-build-core>=0.11.3,<0.12' build wheel
@@ -28,12 +28,15 @@ python -m pip install --no-build-isolation ./thirdparty/naja
 python -m pip install --no-build-isolation .
 ```
 
-The wheel CI builds and installs a separate local provider wheel for every
-Python/platform combination. Publishing Kepler is blocked until the SDK is
-released and its released version is pinned in `pyproject.toml` and
-`ci/shared_naja_wheels.py`. An older NajaEDA wheel without this SDK cannot be
-used for direct object sharing. Once that prerequisite is satisfied, ordinary
-isolated `pip install .` builds can resolve the provider from the package index.
+Default wheel CI builds and installs a separate local provider wheel for every
+Python/platform combination. Only a manual `publish` request adds a second,
+parallel set of jobs against published NajaEDA `0.7.24` wheels through KF's
+version-specific compatibility adapter. Both provider sets must pass before
+publication; only wheels tested against the published provider are uploaded.
+The adapter obtains matching release headers, links the installed native
+libraries, and checks their identity before sharing designs. Those wheels
+require `najaeda==0.7.24`, which pip installs normally. There is no separate
+provider checkbox; see [release instructions](python-release.md).
 
 `BUILD_KEPLER_PYTHON=ON` is a Python-only CMake build. Build the standalone
 executable separately with `BUILD_KEPLER_PYTHON=OFF`; it continues to use the
@@ -61,10 +64,10 @@ Maintainers can publish tested wheels using the manual
 ## Shared NajaEDA runtime
 
 `najaeda` is a runtime dependency of `kepler_formal` and is imported before
-Kepler's native extension. It initializes the Naja runtime and publishes a
-versioned native API that Kepler validates at import and before each live-design
-call. A mismatched build, ABI, or runtime identity fails explicitly instead of
-passing objects across an unsafe binary boundary.
+Kepler's native extension. Development builds use its versioned native API to
+check build and runtime identity. The published-provider adapter instead checks
+the pinned release's native-file fingerprints, exported Python types, and live
+universe identity. Both paths reject mismatches before accepting live designs.
 
 For compatibility, `kepler_formal.najaeda` and all of its submodules are
 aliases to the original package:

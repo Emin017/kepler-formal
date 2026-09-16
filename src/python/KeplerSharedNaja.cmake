@@ -1,6 +1,9 @@
 # Copyright 2026 keplertech.io
 # SPDX-License-Identifier: GPL-3.0-only
 
+if(KEPLER_USE_PUBLISHED_NAJAEDA)
+  include("${CMAKE_CURRENT_LIST_DIR}/KeplerPublishedNaja.cmake")
+else()
 # Use the SDK belonging to this interpreter's installed provider. A CMake
 # override alone must not select a different runtime than Python will import.
 execute_process(
@@ -25,6 +28,7 @@ endif()
 # Shadow it locally so both fresh and reused builds select Python's provider.
 set(NajaEDA_DIR "${provider_cmake_dir}")
 find_package(NajaEDA CONFIG REQUIRED PATHS "${provider_cmake_dir}" NO_DEFAULT_PATH)
+endif()
 
 # These build-policy targets normally come from the vendored Naja project.
 # Do not modify the installed provider's compilation or import another runtime.

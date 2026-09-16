@@ -13,9 +13,7 @@
 #include <vector>
 
 #include "KeplerBorrowedDesigns.h"
-#include "NajaPythonRuntimeAPI.h"
-#include "NajaRuntimeBuild.h"
-#include "NLUniverse.h"
+#include "KeplerNajaRuntime.h"
 #include "SNLDesign.h"
 
 #ifndef KEPLER_FORMAL_VERSION
@@ -70,38 +68,6 @@ bool ensureGilEnabled() {
     return false;
   }
 #endif
-  return true;
-}
-
-bool getRuntimeAPI(const NajaPythonRuntimeAPI *&api,
-                   PyObject *errorType = PyExc_RuntimeError) {
-  api = NajaPythonRuntime_Import();
-  if (api == nullptr) {
-    return false;
-  }
-  if (api->build_id == nullptr || api->runtime_identity == nullptr ||
-      api->get_universe == nullptr || api->unwrap_design == nullptr) {
-    PyErr_SetString(errorType, "Incomplete NajaEDA native runtime API");
-    return false;
-  }
-  if (std::strcmp(api->build_id, NAJA_RUNTIME_BUILD_ID) != 0) {
-    PyErr_Format(errorType,
-                 "NajaEDA native build mismatch: provider %.80s, Kepler %.80s",
-                 api->build_id, NAJA_RUNTIME_BUILD_ID);
-    return false;
-  }
-  const auto localIdentity = naja::NL::NLUniverse::getRuntimeIdentity();
-  if (api->runtime_identity != localIdentity) {
-    PyErr_SetString(
-        errorType,
-        "NajaEDA and Kepler Formal did not load the same native runtime");
-    return false;
-  }
-  if (api->get_universe() != naja::NL::NLUniverse::get()) {
-    PyErr_SetString(errorType,
-                    "NajaEDA and Kepler Formal disagree on the active universe");
-    return false;
-  }
   return true;
 }
 
@@ -416,11 +382,10 @@ PyObject *fromNajaeda(PyObject *, PyObject *args) {
   if (sourceOwner == nullptr) {
     sourceOwner = designOwner;
   }
-  const NajaPythonRuntimeAPI *api = nullptr;
-  if (!getRuntimeAPI(api)) {
+  if (!KEPLER_FORMAL::validateNajaRuntime(PyExc_RuntimeError)) {
     return nullptr;
   }
-  void *design = api->unwrap_design(designOwner);
+  void *design = KEPLER_FORMAL::unwrapNajaDesign(designOwner);
   if (design == nullptr) {
     return nullptr;
   }
@@ -435,15 +400,14 @@ PyObject *fromNajaeda(PyObject *, PyObject *args) {
   return reinterpret_cast<PyObject *>(handle);
 }
 
-naja::NL::SNLDesign *unwrapNativeDesign(PyObject *object, const char *label,
-                                       const NajaPythonRuntimeAPI *api) {
+naja::NL::SNLDesign *unwrapNativeDesign(PyObject *object, const char *label) {
   if (nativeDesignType == nullptr ||
       !PyObject_TypeCheck(object, nativeDesignType)) {
     PyErr_Format(PyExc_TypeError, "%s must be a NativeDesign", label);
     return nullptr;
   }
   auto *handle = reinterpret_cast<PyNativeDesign *>(object);
-  void *current = api->unwrap_design(handle->designOwner);
+  void *current = KEPLER_FORMAL::unwrapNajaDesign(handle->designOwner);
   if (current == nullptr) {
     return nullptr;
   }
@@ -470,15 +434,14 @@ PyObject *verifyDesigns(PyObject *, PyObject *args) {
   if (!parseBorrowedOptions(optionObject, options)) {
     return nullptr;
   }
-  const NajaPythonRuntimeAPI *api = nullptr;
-  if (!getRuntimeAPI(api)) {
+  if (!KEPLER_FORMAL::validateNajaRuntime(PyExc_RuntimeError)) {
     return nullptr;
   }
-  auto *first = unwrapNativeDesign(firstObject, "design1", api);
+  auto *first = unwrapNativeDesign(firstObject, "design1");
   if (first == nullptr) {
     return nullptr;
   }
-  auto *second = unwrapNativeDesign(secondObject, "design2", api);
+  auto *second = unwrapNativeDesign(secondObject, "design2");
   if (second == nullptr) {
     return nullptr;
   }
@@ -526,8 +489,7 @@ PyModuleDef module = {
 } // namespace
 
 PyMODINIT_FUNC PyInit__native() {
-  const NajaPythonRuntimeAPI *api = nullptr;
-  if (!getRuntimeAPI(api, PyExc_ImportError)) {
+  if (!KEPLER_FORMAL::validateNajaRuntime(PyExc_ImportError)) {
     return nullptr;
   }
 
@@ -543,6 +505,15 @@ PyMODINIT_FUNC PyInit__native() {
     return nullptr;
   }
   if (PyModule_AddObjectRef(result.get(), "NativeDesign", nativeDesign.get()) < 0) {
+    nativeDesignType = nullptr;
+    return nullptr;
+  }
+#ifdef KEPLER_USE_PUBLISHED_NAJAEDA
+  constexpr const char* providerMode = "published";
+#else
+  constexpr const char* providerMode = "sdk";
+#endif
+  if (PyModule_AddStringConstant(result.get(), "_provider_mode", providerMode) < 0) {
     nativeDesignType = nullptr;
     return nullptr;
   }

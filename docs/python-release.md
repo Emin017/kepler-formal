@@ -2,8 +2,10 @@
 
 The **Python wheels** workflow (`.github/workflows/python-wheels.yml`) can
 publish `kepler-formal` to PyPI through a manual run on `main`. Publishing is
-off by default. PRs, `v*` tags, and ordinary manual builds only produce tested
-wheel artifacts; they never publish to PyPI.
+off by default. PRs, `v*` tags, and manual builds with `publish` unchecked use
+the development NajaEDA provider and only produce tested wheel artifacts.
+A manual `publish` request adds published-provider tests in parallel with the
+development jobs. Both must pass before publication.
 
 This is separate from [binary releases](releasing.md). Do not create a tag or
 run `tools/release.sh` for a Python-only release: `v*` tags also trigger the
@@ -41,8 +43,9 @@ declaring an environment in the workflow does not configure its protections.
 
 No stored PyPI API token is needed. Only the separate publishing job receives
 `id-token: write`; build jobs do not. The publisher downloads the current
-run's four wheel artifacts and uploads them without checking out or building
-source in the privileged job.
+run's four published-provider wheel artifacts and uploads them without
+checking out or building source in the privileged job. Development-provider
+artifacts are never uploaded to PyPI.
 
 See the official [PyPI setup instructions](https://docs.pypi.org/trusted-publishers/adding-a-publisher/),
 [Trusted Publishing instructions](https://docs.pypi.org/trusted-publishers/using-a-publisher/),
@@ -52,32 +55,59 @@ and [GitHub environment protection documentation](https://docs.github.com/en/act
 
 After the workflow is present on the repository's default branch, open
 **Actions → Python wheels → Run workflow**. Leave `publish` unchecked and
-`version` empty. The workflow builds, repairs, and tests wheels, then stores
-them as Actions artifacts. This can be used to check a branch before merging.
+`version` empty. These jobs use locally built NajaEDA `0.7.24.dev0` from the
+pinned submodule and its shared-runtime SDK. The workflow builds, repairs,
+and tests wheels, then stores them as Actions artifacts. Use this to check a
+branch before merging.
+
+| Run | Build and test providers |
+| --- | --- |
+| Pull request, tag, or manual run without `publish` | Development provider only. |
+| Manual run with `publish` | Development provider and published NajaEDA `0.7.24`, in parallel. |
+
+There is no separate provider checkbox. The published-provider jobs run only
+as a prerequisite to a requested publication. The [local source
+regression](python-regression.md) remains separate and continues building both
+packages from the pinned source without wheels or publishing.
+
+## Published-provider integration
+
+The published-provider matrix entries set `KEPLER_USE_PUBLISHED_NAJAEDA=1`
+for the wheel helpers, including Linux containers. Before building,
+`ci/prepare_python_release.py` updates only those jobs' checkouts: both NajaEDA
+requirements become `najaeda==0.7.24`, and the CMake option
+`KEPLER_USE_PUBLISHED_NAJAEDA` is enabled. These edits are not committed:
+repository defaults and development jobs stay on the development provider
+with the option off. Build and runtime pins must match, so installations of
+a published-provider Kepler wheel select the same NajaEDA release.
+
+Published NajaEDA does not supply the development shared-runtime SDK. This
+compatibility path is deliberately pinned to `0.7.24` and uses released native
+symbols, including the private DNL cache integration. It is not a general ABI
+guarantee for arbitrary NajaEDA versions; any provider upgrade requires a new
+compatibility review and the complete wheel tests. It does not change NajaEDA
+or bundle a second Naja runtime.
 
 ## Publish a release
 
-The shared-runtime integration currently pins the **unreleased** NajaEDA SDK
-`0.7.24.dev0`. Publication is deliberately blocked. First release that SDK
-with the matching platform/Python wheels, then update the provider pin in
-`pyproject.toml` (build and runtime requirements) and
-`ci/shared_naja_wheels.py`. Development CI builds a local provider wheel;
-after switching to a release pin, CI downloads the published provider instead.
-This matters because a same-version rebuild is not necessarily ABI/build
-identical to the provider that users install. Kepler and Naja validate native
-build identity before sharing objects.
+`publish` is the only upload switch. Its additional jobs download and link
+against NajaEDA's actual distributed wheels instead of rebuilding a
+same-version provider locally. Publication waits for both the development and
+published-provider matrices, then uploads only the published-provider wheels.
 
 1. Merge the intended code and workflow changes into `main` and confirm its
    checks pass. Choose an unused PyPI release version. The Python package
-   version is read from `project(kepler-formal VERSION ...)` in `CMakeLists.txt`;
+   version is read from `src/bin/KeplerVersion.h.in`, the same source used by
+   CMake and Python package metadata;
    merge any necessary version change before starting the workflow. The
    publishing workflow does not bump or override any version declarations.
 2. Open **Actions → Python wheels → Run workflow**, select `main`, check
    `publish`, and enter that exact version in `version`.
-3. All four matrix jobs validate the version and print the selected commit SHA in
-   their summaries, then build, repair, and test the wheels from that run's
-   checkout. A mismatched or missing version, another branch, or another
-   repository fails validation. Publication waits for all four jobs to succeed.
+3. Four development jobs and four published-provider jobs build, repair, and
+   test wheels in parallel. Published-provider jobs validate the version and
+   print the selected commit SHA in their summaries. A mismatched or missing
+   version, another branch, or another repository fails validation.
+   Publication waits for all eight jobs to succeed.
 4. Review the commit, version, test results, and artifacts. Approve the waiting
    `pypi` environment deployment to allow the publishing job to run.
 5. Confirm the release on [PyPI](https://pypi.org/project/kepler-formal/) and
@@ -90,7 +120,9 @@ build identity before sharing objects.
 
 ## Wheel coverage
 
-The matrix matches the vendored NajaEDA workflow: **26 wheels** per release.
+Each provider matrix matches the vendored NajaEDA workflow: **26 wheels**.
+A publish run tests both matrices and uploads only the 26 published-provider
+wheels.
 
 | Platform | Architecture | CPython versions | Wheels |
 | --- | --- | --- | --- |
@@ -105,8 +137,8 @@ verification; they do not promise concurrent, GIL-free engine calls.
 
 `ci/check_wheel_matrix.py` compares cibuildwheel's actual selected build IDs
 against NajaEDA's checked-in matrix and checks that publishing includes every
-platform artifact. A Naja update that changes its matrix requires an explicit
-corresponding update here. Every wheel runs the package tests and native
+published-provider platform artifact. A Naja update that changes its matrix
+requires an explicit corresponding update here. Every wheel runs the package tests and native
 dependency/shared-runtime checks after repair. Windows reuses Naja's pregenerated
 parser and vcpkg dependency approach, with KF-owned solver compatibility code.
 The wheel smoke test loads designs through NajaEDA, verifies equivalent and

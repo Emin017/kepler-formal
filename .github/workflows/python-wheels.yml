@@ -12,7 +12,7 @@ on:
         required: false
         default: false
       version:
-        description: Confirm the version in CMakeLists.txt when publishing (does not override it)
+        description: Confirm the version in KeplerVersion.h.in when publishing (does not override it)
         type: string
         required: false
         default: ''
@@ -69,11 +69,15 @@ jobs:
           if-no-files-found: error
 
   build:
-    name: ${{ matrix.platform }} / ${{ matrix.arch }}
+    name: ${{ matrix.provider }} / ${{ matrix.platform }} / ${{ matrix.arch }}
     needs: generate-parser
     strategy:
       fail-fast: false
       matrix:
+        # Release requests test the published provider alongside the normal
+        # development provider. Ordinary CI never selects the published path.
+        provider: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.publish && '["development", "published"]' || '["development"]') }}
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
         include:
           - os: ubuntu-24.04
             platform: manylinux_2_28
@@ -90,6 +94,10 @@ jobs:
             platform: Windows
             arch: AMD64
     runs-on: ${{ matrix.os }}
+    env:
+      KEPLER_USE_PUBLISHED_NAJAEDA: ${{ matrix.provider == 'published' && '1' || '0' }}
+      # Linux builds and tests run inside a manylinux container.
+      CIBW_ENVIRONMENT_PASS_LINUX: KEPLER_USE_PUBLISHED_NAJAEDA
 
     steps:
       - uses: actions/checkout@v4
@@ -102,6 +110,9 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: Prepare Python provider metadata
+        run: python ci/prepare_python_release.py --project .
+
       - name: Install Windows wheel repair tool
         if: runner.os == 'Windows'
         run: python -m pip install delvewheel
@@ -113,37 +124,11 @@ jobs:
           arch: x64
 
       - name: Validate Python release request
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && matrix.provider == 'published' }}
         shell: bash
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          python - <<'PY'
-          import os
-          import re
-          import sys
-          from pathlib import Path
-
-          if (os.environ["GITHUB_REPOSITORY"] != "keplertech/kepler-formal"
-                  or os.environ["GITHUB_REF"] != "refs/heads/main"):
-              sys.exit("PyPI publishing is only allowed from keplertech/kepler-formal main.")
-
-          match = re.search(
-              r"project\(kepler-formal\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)",
-              Path("CMakeLists.txt").read_text(encoding="utf-8"),
-          )
-          if match is None:
-              sys.exit("Cannot read the Python package version from CMakeLists.txt.")
-          version = match.group(1)
-          if "najaeda==0.7.24.dev0" in Path("pyproject.toml").read_text(encoding="utf-8"):
-              sys.exit("Publish the NajaEDA shared-runtime SDK and pin its released version before publishing Kepler Formal.")
-          if os.environ["RELEASE_VERSION"] != version:
-              sys.exit(f"To publish, confirm version {version} in the workflow's version input.")
-          summary = f"Release request: kepler-formal {version} from {os.environ['GITHUB_SHA']}\n"
-          print(summary)
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
-              output.write(summary)
-          PY
+        run: python ci/prepare_python_release.py --project . --validate-publish
 
       - name: Verify recursive submodules
         run: git submodule status --recursive
@@ -166,7 +151,7 @@ jobs:
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kepler-formal-${{ matrix.platform }}-${{ matrix.arch }}
+          name: kepler-formal-${{ matrix.provider }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: wheelhouse/*.whl
           if-no-files-found: error
 
@@ -188,30 +173,30 @@ jobs:
       contents: read
       id-token: write
     steps:
-      # Download only this run's four tested wheel artifacts. An absent
-      # artifact is an error; never publish a partial platform matrix.
+      # The entire build matrix must pass, including both providers. Upload
+      # only the four published-provider artifacts from this run.
       - name: Download Linux wheels
         uses: actions/download-artifact@v8
         with:
-          name: kepler-formal-manylinux_2_28-x86_64
+          name: kepler-formal-published-manylinux_2_28-x86_64
           path: dist/
 
       - name: Download macOS wheels
         uses: actions/download-artifact@v8
         with:
-          name: kepler-formal-macOS-arm64
+          name: kepler-formal-published-macOS-arm64
           path: dist/
 
       - name: Download Linux ARM64 wheels
         uses: actions/download-artifact@v8
         with:
-          name: kepler-formal-manylinux_2_28-aarch64
+          name: kepler-formal-published-manylinux_2_28-aarch64
           path: dist/
 
       - name: Download Windows wheels
         uses: actions/download-artifact@v8
         with:
-          name: kepler-formal-Windows-AMD64
+          name: kepler-formal-published-Windows-AMD64
           path: dist/
 
       - name: Publish to PyPI using Trusted Publishing

@@ -20,7 +20,10 @@ import subprocess
 import sys
 import tempfile
 
-PROVIDER_REQUIREMENT = "najaeda==0.7.24.dev0"
+PROVIDER_REQUIREMENT = (
+    "najaeda==0.7.24" if os.environ.get("KEPLER_USE_PUBLISHED_NAJAEDA") == "1"
+    else "najaeda==0.7.24.dev0"
+)
 
 
 def run(*arguments: str, env: dict[str, str] | None = None) -> None:

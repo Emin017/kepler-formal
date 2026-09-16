@@ -77,6 +77,10 @@ class LiveNajaedaInteroperabilityTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
 
     def tearDown(self):
+        # Released NajaEDA parameter wrappers must be released before the
+        # caller explicitly destroys their owning netlists.
+        self.reference_parameter = None
+        self.candidate_parameter = None
         netlist.reset()
         self.temporary.cleanup()
 
@@ -180,6 +184,7 @@ class LiveNajaedaInteroperabilityTest(unittest.TestCase):
             verify_designs(instance, self.candidate)
 
         handle = from_najaeda(self.candidate)
+        self.candidate_parameter = None
         self.candidate.destroy()
         with self.assertRaises(ReferenceError):
             verify_designs(handle, self.reference)
