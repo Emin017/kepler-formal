@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "KeplerBorrowedDesigns.h"
+#include "KeplerNajaState.h"
 
 #include <filesystem>
 #include <memory>
@@ -58,7 +59,7 @@ class BorrowedNajaState {
     }
     // The exchange does not lazily construct a graph, unlike DNL::get(). Do
     // this last so allocation failures above leave the caller untouched.
-    dnl_ = naja::DNL::exchange(nullptr);
+    dnl_ = exchangeNajaDNL(nullptr);
   }
 
   ~BorrowedNajaState() {
@@ -73,7 +74,7 @@ class BorrowedNajaState {
       entry.first->setTopDesign(entry.second);
     }
     universe_->setTopDB(topDB_);
-    naja::DNL::exchange(dnl_);
+    exchangeNajaDNL(dnl_);
   }
 
   BorrowedNajaState(const BorrowedNajaState&) = delete;

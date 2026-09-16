@@ -2,7 +2,8 @@
 
 The **Python wheels** workflow (`.github/workflows/python-wheels.yml`) can
 publish `kepler-formal` to PyPI through a manual run on `main`. Publishing is
-off by default. PRs, `v*` tags, and ordinary manual builds only produce tested
+off by default. Its separate `published_najaeda` input is also off by default.
+PRs, `v*` tags, and manual builds with `publish` unchecked only produce tested
 wheel artifacts; they never publish to PyPI.
 
 This is separate from [binary releases](releasing.md). Do not create a tag or
@@ -52,32 +53,56 @@ and [GitHub environment protection documentation](https://docs.github.com/en/act
 
 After the workflow is present on the repository's default branch, open
 **Actions → Python wheels → Run workflow**. Leave `publish` unchecked and
-`version` empty. The workflow builds, repairs, and tests wheels, then stores
-them as Actions artifacts. This can be used to check a branch before merging.
+`version` empty. Choose the NajaEDA provider with `published_najaeda`:
+
+| `published_najaeda` | Build and test provider |
+| --- | --- |
+| Unchecked (default) | Locally built NajaEDA `0.7.24.dev0` from the pinned submodule, using its shared-runtime SDK. |
+| Checked | Published NajaEDA `0.7.24` wheels, using KF's explicitly enabled compatibility integration. |
+
+The workflow builds, repairs, and tests wheels, then stores them as Actions
+artifacts. Both modes can be used to check a branch before merging. Enabling
+the published provider does **not** enable publication.
+
+The published mode sets `KEPLER_USE_PUBLISHED_NAJAEDA=1` for the wheel helpers,
+including Linux containers. Before building, `ci/prepare_python_release.py`
+updates the build checkout's two NajaEDA requirements to `najaeda==0.7.24`
+and enables the CMake option `KEPLER_USE_PUBLISHED_NAJAEDA`. These edits are
+not committed: repository defaults remain on the development provider with
+the option off. Build and runtime pins must match, so installations of a
+published-provider Kepler wheel select the same NajaEDA release.
+
+Published NajaEDA does not supply the development shared-runtime SDK. This
+compatibility path is deliberately pinned to `0.7.24` and uses released native
+symbols, including the private DNL cache integration. It is not a general ABI
+guarantee for arbitrary NajaEDA versions; any provider upgrade requires a new
+compatibility review and the complete wheel tests. It does not change NajaEDA
+or bundle a second Naja runtime.
+
+The [local source regression](python-regression.md)
+remains separate and continues building both packages from the pinned source
+without wheels or publishing.
 
 ## Publish a release
 
-The shared-runtime integration currently pins the **unreleased** NajaEDA SDK
-`0.7.24.dev0`. Publication is deliberately blocked. First release that SDK
-with the matching platform/Python wheels, then update the provider pin in
-`pyproject.toml` (build and runtime requirements) and
-`ci/shared_naja_wheels.py`. Development CI builds a local provider wheel;
-after switching to a release pin, CI downloads the published provider instead.
-This matters because a same-version rebuild is not necessarily ABI/build
-identical to the provider that users install. Kepler and Naja validate native
-build identity before sharing objects.
+Publication requires both `published_najaeda` and `publish`. Development
+provider builds cannot be uploaded. The published-provider build downloads
+and links against NajaEDA's actual distributed wheels instead of rebuilding a
+same-version provider locally.
 
 1. Merge the intended code and workflow changes into `main` and confirm its
    checks pass. Choose an unused PyPI release version. The Python package
-   version is read from `project(kepler-formal VERSION ...)` in `CMakeLists.txt`;
+   version is read from `src/bin/KeplerVersion.h.in`, the same source used by
+   CMake and Python package metadata;
    merge any necessary version change before starting the workflow. The
    publishing workflow does not bump or override any version declarations.
 2. Open **Actions → Python wheels → Run workflow**, select `main`, check
-   `publish`, and enter that exact version in `version`.
+   `published_najaeda` and `publish`, and enter that exact version in `version`.
 3. All four matrix jobs validate the version and print the selected commit SHA in
    their summaries, then build, repair, and test the wheels from that run's
-   checkout. A mismatched or missing version, another branch, or another
-   repository fails validation. Publication waits for all four jobs to succeed.
+   checkout. A mismatched or missing version, another branch, another
+   repository, or missing published-provider selection fails validation.
+   Publication waits for all four jobs to succeed.
 4. Review the commit, version, test results, and artifacts. Approve the waiting
    `pypi` environment deployment to allow the publishing job to run.
 5. Confirm the release on [PyPI](https://pypi.org/project/kepler-formal/) and

@@ -6,13 +6,18 @@ name: Python wheels
 on:
   workflow_dispatch:
     inputs:
+      published_najaeda:
+        description: Build against published NajaEDA 0.7.24 instead of the local development provider
+        type: boolean
+        required: false
+        default: false
       publish:
         description: Publish tested wheels to PyPI (main only; requires pypi environment approval)
         type: boolean
         required: false
         default: false
       version:
-        description: Confirm the version in CMakeLists.txt when publishing (does not override it)
+        description: Confirm the version in KeplerVersion.h.in when publishing (does not override it)
         type: string
         required: false
         default: ''
@@ -90,6 +95,10 @@ jobs:
             platform: Windows
             arch: AMD64
     runs-on: ${{ matrix.os }}
+    env:
+      KEPLER_USE_PUBLISHED_NAJAEDA: ${{ inputs.published_najaeda && '1' || '0' }}
+      # Linux builds and tests run inside a manylinux container.
+      CIBW_ENVIRONMENT_PASS_LINUX: KEPLER_USE_PUBLISHED_NAJAEDA
 
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +110,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
+
+      - name: Prepare Python provider metadata
+        run: python ci/prepare_python_release.py --project .
 
       - name: Install Windows wheel repair tool
         if: runner.os == 'Windows'
@@ -117,33 +129,7 @@ jobs:
         shell: bash
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          python - <<'PY'
-          import os
-          import re
-          import sys
-          from pathlib import Path
-
-          if (os.environ["GITHUB_REPOSITORY"] != "keplertech/kepler-formal"
-                  or os.environ["GITHUB_REF"] != "refs/heads/main"):
-              sys.exit("PyPI publishing is only allowed from keplertech/kepler-formal main.")
-
-          match = re.search(
-              r"project\(kepler-formal\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)",
-              Path("CMakeLists.txt").read_text(encoding="utf-8"),
-          )
-          if match is None:
-              sys.exit("Cannot read the Python package version from CMakeLists.txt.")
-          version = match.group(1)
-          if "najaeda==0.7.24.dev0" in Path("pyproject.toml").read_text(encoding="utf-8"):
-              sys.exit("Publish the NajaEDA shared-runtime SDK and pin its released version before publishing Kepler Formal.")
-          if os.environ["RELEASE_VERSION"] != version:
-              sys.exit(f"To publish, confirm version {version} in the workflow's version input.")
-          summary = f"Release request: kepler-formal {version} from {os.environ['GITHUB_SHA']}\n"
-          print(summary)
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
-              output.write(summary)
-          PY
+        run: python ci/prepare_python_release.py --project . --validate-publish
 
       - name: Verify recursive submodules
         run: git submodule status --recursive
@@ -176,6 +162,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.publish &&
+      inputs.published_najaeda &&
       github.repository == 'keplertech/kepler-formal' &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest

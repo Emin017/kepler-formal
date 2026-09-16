@@ -17,10 +17,10 @@ For local regression without wheels or publishing, use the
 [source regression runner](python-regression.md). It compiles both Python
 packages from this checkout and tests their shared runtime.
 
-This development change requires the matching NajaEDA shared-runtime SDK,
-currently version `0.7.24.dev0` in `thirdparty/naja`. That SDK has not been
-published. Build both packages from this recursive checkout in one virtual
-environment, with the native build dependencies installed:
+The default development build uses the matching NajaEDA shared-runtime SDK,
+version `0.7.24.dev0` in `thirdparty/naja`. Build both packages from this
+recursive checkout in one virtual environment, with the native build
+dependencies installed:
 
 ```bash
 python -m pip install 'scikit-build-core>=0.11.3,<0.12' build wheel
@@ -28,12 +28,13 @@ python -m pip install --no-build-isolation ./thirdparty/naja
 python -m pip install --no-build-isolation .
 ```
 
-The wheel CI builds and installs a separate local provider wheel for every
-Python/platform combination. Publishing Kepler is blocked until the SDK is
-released and its released version is pinned in `pyproject.toml` and
-`ci/shared_naja_wheels.py`. An older NajaEDA wheel without this SDK cannot be
-used for direct object sharing. Once that prerequisite is satisfied, ordinary
-isolated `pip install .` builds can resolve the provider from the package index.
+Default wheel CI builds and installs a separate local provider wheel for every
+Python/platform combination. The optional `published_najaeda` workflow switch
+instead selects the unmodified published NajaEDA `0.7.24` wheels through KF's
+version-specific compatibility adapter. It obtains matching release headers,
+links the installed native libraries, and checks their identity before sharing
+designs. The switch is off by default; see [release instructions](python-release.md).
+Wheels built in this mode require `najaeda==0.7.24`, which pip installs normally.
 
 `BUILD_KEPLER_PYTHON=ON` is a Python-only CMake build. Build the standalone
 executable separately with `BUILD_KEPLER_PYTHON=OFF`; it continues to use the
