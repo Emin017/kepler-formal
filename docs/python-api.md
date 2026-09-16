@@ -13,6 +13,10 @@ by both APIs.
 
 ## Build and install
 
+For local regression without wheels or publishing, use the
+[source regression runner](python-regression.md). It compiles both Python
+packages from this checkout and tests their shared runtime.
+
 This development change requires the matching NajaEDA shared-runtime SDK,
 currently version `0.7.24.dev0` in `thirdparty/naja`. That SDK has not been
 published. Build both packages from this recursive checkout in one virtual
