@@ -131,13 +131,7 @@ Additional notes and the BCR publication roadmap are tracked in
 
 The full binary and YAML flag reference is tracked in [docs/flags-spec.md](docs/flags-spec.md). SEC-specific flags, engine behavior, encoding defaults, and skipped-output reports are documented in [docs/sec-flags-spec.md](docs/sec-flags-spec.md).
 
-To export KF's prepared SEC equivalence problem before solving, use
-`--dump-btor2 equivalence.btor2`. Add `--dump-only` to stop after export.
-The YAML equivalents are `btor2_export: true`,
-`btor2_export_path: equivalence.btor2`, and `dump_only: true`.
-See [BTOR2 export](docs/btor2-export.md) for examples and model semantics.
-
-### Custom Python Primitives
+## Custom Python Primitives
 
 Custom technology primitives can be defined in Python and loaded through the
 YAML `py_tech_files` option. See
