@@ -19,6 +19,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/python-wheels.yml
+      - .github/workflows/python-wheel-build.yml
       - pyproject.toml
       - CMakeLists.txt
       - LICENSE.rst
@@ -28,6 +29,7 @@ on:
       - thirdparty/**
       - .gitmodules
   push:
+    branches: [main]
     tags: ['v*']
 
 permissions:
@@ -49,9 +51,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
-      - name: Check wheel coverage against NajaEDA
+      - name: Check release gates and wheel coverage against NajaEDA
         run: |
           python -m pip install cibuildwheel==4.2.0 PyYAML
+          python -m unittest discover -v -s test/python -p test_wheel_workflow.py
           python ci/check_wheel_matrix.py
       - name: Install parser generators
         run: sudo apt-get update && sudo apt-get install -y bison flex libfl-dev
@@ -68,96 +71,26 @@ jobs:
           path: generated-parser/*
           if-no-files-found: error
 
-  build:
-    name: ${{ matrix.provider }} / ${{ matrix.platform }} / ${{ matrix.arch }}
+  # Default regression stays independent of the opt-in publication path.
+  development:
+    name: development
     needs: generate-parser
-    strategy:
-      fail-fast: false
-      matrix:
-        # Release requests test the published provider alongside the normal
-        # development provider. Ordinary CI never selects the published path.
-        provider: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.publish && '["development", "published"]' || '["development"]') }}
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
-        include:
-          - os: ubuntu-24.04
-            platform: manylinux_2_28
-            arch: x86_64
-          - os: ubuntu-24.04-arm
-            platform: manylinux_2_28
-            arch: aarch64
-          # Vendored Slang requires a newer AppleClang than Xcode 15.4 on the
-          # macos-14 image.  The repository's macOS build also uses latest.
-          - os: macos-latest
-            platform: macOS
-            arch: arm64
-          - os: windows-latest
-            platform: Windows
-            arch: AMD64
-    runs-on: ${{ matrix.os }}
-    env:
-      KEPLER_USE_PUBLISHED_NAJAEDA: ${{ matrix.provider == 'published' && '1' || '0' }}
-      # Linux builds and tests run inside a manylinux container.
-      CIBW_ENVIRONMENT_PASS_LINUX: KEPLER_USE_PUBLISHED_NAJAEDA
+    uses: ./.github/workflows/python-wheel-build.yml
+    with:
+      provider: development
 
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-          persist-credentials: false
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.14'
-
-      - name: Prepare Python provider metadata
-        run: python ci/prepare_python_release.py --project .
-
-      - name: Install Windows wheel repair tool
-        if: runner.os == 'Windows'
-        run: python -m pip install delvewheel
-
-      - name: Set up Windows SDK and MSVC environment for clang-cl
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Validate Python release request
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && matrix.provider == 'published' }}
-        shell: bash
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: python ci/prepare_python_release.py --project . --validate-publish
-
-      - name: Verify recursive submodules
-        run: git submodule status --recursive
-
-      - name: Download generated parser for Windows
-        if: runner.os == 'Windows'
-        uses: actions/download-artifact@v8
-        with:
-          name: kepler-verilog-parser
-          path: thirdparty/naja/thirdparty/naja-verilog/src/generated
-
-      - name: Build, repair, and test wheels
-        uses: pypa/cibuildwheel@v4.2.0
-        env:
-          CIBW_ARCHS: ${{ matrix.arch }}
-        with:
-          package-dir: .
-          output-dir: wheelhouse
-
-      - name: Upload wheel artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: kepler-formal-${{ matrix.provider }}-${{ matrix.platform }}-${{ matrix.arch }}
-          path: wheelhouse/*.whl
-          if-no-files-found: error
+  published:
+    name: published
+    needs: generate-parser
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    uses: ./.github/workflows/python-wheel-build.yml
+    with:
+      provider: published
+      version: ${{ inputs.version }}
 
   publish:
     name: Publish kepler-formal ${{ inputs.version }} to PyPI
-    needs: build
+    needs: published
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.publish &&
@@ -173,8 +106,8 @@ jobs:
       contents: read
       id-token: write
     steps:
-      # The entire build matrix must pass, including both providers. Upload
-      # only the four published-provider artifacts from this run.
+      # Only the published-provider matrix gates this job. Development
+      # regression runs independently and never supplies release artifacts.
       - name: Download Linux wheels
         uses: actions/download-artifact@v8
         with:

@@ -2,10 +2,11 @@
 
 The **Python wheels** workflow (`.github/workflows/python-wheels.yml`) can
 publish `kepler-formal` to PyPI through a manual run on `main`. Publishing is
-off by default. PRs, `v*` tags, and manual builds with `publish` unchecked use
-the development NajaEDA provider and only produce tested wheel artifacts.
+off by default. Relevant PRs, pushes to `main`, `v*` tags, and manual builds with
+`publish` unchecked use the development NajaEDA provider and only produce
+tested wheel artifacts.
 A manual `publish` request adds published-provider tests in parallel with the
-development jobs. Both must pass before publication.
+development jobs. Only the published-provider jobs gate publication.
 
 This is separate from [binary releases](releasing.md). Do not create a tag or
 run `tools/release.sh` for a Python-only release: `v*` tags also trigger the
@@ -62,7 +63,7 @@ branch before merging.
 
 | Run | Build and test providers |
 | --- | --- |
-| Pull request, tag, or manual run without `publish` | Development provider only. |
+| Relevant pull request, push to `main`, `v*` tag, or manual run without `publish` | Development provider only. |
 | Manual run with `publish` | Development provider and published NajaEDA `0.7.24`, in parallel. |
 
 There is no separate provider checkbox. The published-provider jobs run only
@@ -70,9 +71,13 @@ as a prerequisite to a requested publication. The [local source
 regression](python-regression.md) remains separate and continues building both
 packages from the pinned source without wheels or publishing.
 
+Both wheel paths use the reusable `python-wheel-build.yml` workflow to share
+their build and test steps. The publishing job remains in `python-wheels.yml`
+with the same `pypi` environment and Trusted Publisher configuration.
+
 ## Published-provider integration
 
-The published-provider matrix entries set `KEPLER_USE_PUBLISHED_NAJAEDA=1`
+The published-provider jobs set `KEPLER_USE_PUBLISHED_NAJAEDA=1`
 for the wheel helpers, including Linux containers. Before building,
 `ci/prepare_python_release.py` updates only those jobs' checkouts: both NajaEDA
 requirements become `najaeda==0.7.24`, and the CMake option
@@ -92,8 +97,9 @@ or bundle a second Naja runtime.
 
 `publish` is the only upload switch. Its additional jobs download and link
 against NajaEDA's actual distributed wheels instead of rebuilding a
-same-version provider locally. Publication waits for both the development and
-published-provider matrices, then uploads only the published-provider wheels.
+same-version provider locally. Publication waits only for the
+published-provider matrix and uploads only its wheels. Development-provider
+jobs continue as regression checks; their status does not block publication.
 
 1. Merge the intended code and workflow changes into `main` and confirm its
    checks pass. Choose an unused PyPI release version. The Python package
@@ -107,7 +113,8 @@ published-provider matrices, then uploads only the published-provider wheels.
    test wheels in parallel. Published-provider jobs validate the version and
    print the selected commit SHA in their summaries. A mismatched or missing
    version, another branch, or another repository fails validation.
-   Publication waits for all eight jobs to succeed.
+   Publication waits for the four published-provider jobs to succeed,
+   independently of the development-provider results.
 4. Review the commit, version, test results, and artifacts. Approve the waiting
    `pypi` environment deployment to allow the publishing job to run.
 5. Confirm the release on [PyPI](https://pypi.org/project/kepler-formal/) and
@@ -152,8 +159,10 @@ are not added here.
 
 ## Failure handling
 
-Failed builds or missing platform artifacts prevent publication. PyPI upload
-keeps metadata verification and attestations enabled, and does not silently
+Failed published-provider builds or missing published-provider platform
+artifacts prevent publication. Development-provider failures remain visible
+as regression failures and do not block the publishing job. PyPI upload keeps
+metadata verification and attestations enabled, and does not silently
 skip existing files. If an upload fails partway through, inspect the files
 already present on PyPI before deciding how to recover; do not assume a rerun
 can replace them. Use a new version for a rebuilt or changed release instead
