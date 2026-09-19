@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "DesignBoundary.h"
@@ -13,6 +14,7 @@
 #include "NLLibrary.h"
 #include "NLName.h"
 #include "NLUniverse.h"
+#include "SNLBundleTerm.h"
 #include "SNLBusTerm.h"
 #include "SNLBusTermBit.h"
 #include "SNLDesign.h"
@@ -460,6 +462,245 @@ TEST_F(DesignBoundaryTests, ValidatesInterfacesByPairPinAndShape) {
   EXPECT_THROW(
       validateBoundaryInterfaces({input, input}, {input, input}),
       std::invalid_argument);
+}
+
+// Check the diagnostic as well as the exception type so a malformed fixture
+// cannot accidentally exercise a different validation failure.
+void expectInvalidBoundary(SNLDesign* top,
+                           const BoundaryPairs& pairs,
+                           size_t side,
+                           const std::string& diagnostic) {
+  try {
+    BoundaryDesign boundary(top, pairs, side);
+    FAIL() << "Expected boundary validation failure: " << diagnostic;
+  } catch (const std::invalid_argument& error) {
+    EXPECT_NE(std::string::npos, std::string(error.what()).find(diagnostic))
+        << error.what();
+  }
+}
+
+TEST_F(DesignBoundaryTests, RejectsInvalidTopSideAndIncompletePairs) {
+  auto* top = SNLDesign::create(designs_, NLName("top"));
+  auto* primitive = createScalarBlock("BLOCK", {}, {"Y"});
+  const size_t libraryCount = db_->getGlobalLibraries().size();
+
+  expectInvalidBoundary(nullptr, {}, 0, "top design must not be null");
+  expectInvalidBoundary(top, {}, 2, "side must be 0 or 1");
+  expectInvalidBoundary(primitive, {}, 0, "primitive design");
+  expectInvalidBoundary(top, {{"", "u"}}, 0, "path on both sides");
+  expectInvalidBoundary(top, {{"u", ""}}, 1, "path on both sides");
+  // The other side is also validated even when it is not the selected side.
+  expectInvalidBoundary(top, {{"u", ""}}, 0, "path on both sides");
+  EXPECT_EQ(libraryCount, db_->getGlobalLibraries().size());
+}
+
+TEST_F(DesignBoundaryTests, RejectsMalformedPathsAndReportsMissingAncestor) {
+  auto* block = createScalarBlock("BLOCK", {}, {"Y"});
+  auto* wrapper = SNLDesign::create(designs_, NLName("wrapper"));
+  SNLInstance::create(wrapper, block, NLName("leaf"));
+  auto* top = SNLDesign::create(designs_, NLName("top"));
+  SNLInstance::create(top, wrapper, NLName("wrap"));
+
+  for (const std::string path : {"/wrap/leaf", "wrap/leaf/"}) {
+    SCOPED_TRACE(path);
+    expectInvalidBoundary(top, {{path, path}}, 0, "leading or trailing slash");
+  }
+  expectInvalidBoundary(
+      top, {{"wrap//leaf", "wrap//leaf"}}, 0, "empty component");
+  expectInvalidBoundary(
+      top, {{"wrap/missing", "wrap/missing"}}, 0,
+      "does not resolve at `wrap/missing`");
+  expectInvalidBoundary(
+      top, {{"wrap/leaf", "wrap/leaf"}, {"wrap", "wrap"}}, 0,
+      "nested boundary instance paths");
+  EXPECT_NE(nullptr, wrapper->getInstance(NLName("leaf")));
+}
+
+TEST_F(DesignBoundaryTests, PromotesNegativeBusIndicesWithoutNameCollisions) {
+  auto* block = SNLDesign::create(
+      primitives_, SNLDesign::Type::Primitive, NLName("NEGATIVE_BUS"));
+  SNLBusTerm::create(block, SNLTerm::Direction::Output, -1, 1, NLName("Y"));
+  auto* top = SNLDesign::create(designs_, NLName("top"));
+  SNLInstance::create(top, block, NLName("u"));
+
+  BoundaryDesign boundary(top, {{"unused_on_left", "u"}}, 1);
+  ASSERT_EQ(3u, boundary.getPorts().size());
+  for (int bit : {-1, 0, 1}) {
+    const auto* port = findPort(boundary, 0, "Y", bit);
+    ASSERT_NE(nullptr, port);
+    EXPECT_EQ(3u, port->width);
+    EXPECT_EQ(-1, port->msb);
+    EXPECT_EQ(1, port->lsb);
+    EXPECT_FALSE(port->isInput);
+    auto* promoted = boundary.getTop()->getScalarTerm(NLName(port->topTermName));
+    ASSERT_NE(nullptr, promoted);
+    EXPECT_EQ(SNLTerm::Direction::Input, promoted->getDirection());
+    EXPECT_NE(nullptr, promoted->getNet());
+  }
+  EXPECT_EQ("__kepler_boundary_p0_n59_bn1",
+            findPort(boundary, 0, "Y", -1)->topTermName);
+  EXPECT_EQ("__kepler_boundary_p0_n59_bp1",
+            findPort(boundary, 0, "Y", 1)->topTermName);
+  EXPECT_NE(nullptr, top->getInstance(NLName("u")));
+}
+
+TEST_F(DesignBoundaryTests, RejectsConstantDrivenBoundaryOutput) {
+  auto* block = createScalarBlock("BLOCK", {}, {"Y"});
+  auto* top = SNLDesign::create(designs_, NLName("top"));
+  auto* constant = SNLScalarNet::create(top);
+  constant->setType(SNLNet::Type::Assign1);
+  auto* instance = SNLInstance::create(top, block, NLName("u"));
+  instance->getInstTerm(block->getScalarTerm(NLName("Y")))->setNet(constant);
+
+  expectInvalidBoundary(top, {{"u", "u"}}, 0, "connected to a constant net");
+  EXPECT_EQ(constant, instance->getInstTerm(
+                          block->getScalarTerm(NLName("Y")))->getNet());
+}
+
+TEST_F(DesignBoundaryTests, RejectsUnnamedAndUnsupportedDirectionPins) {
+  auto* unnamed = SNLDesign::create(
+      primitives_, SNLDesign::Type::Primitive, NLName("UNNAMED"));
+  SNLScalarTerm::create(unnamed, SNLTerm::Direction::Output);
+  auto* unnamedTop = SNLDesign::create(designs_, NLName("unnamed_top"));
+  SNLInstance::create(unnamedTop, unnamed, NLName("u"));
+  expectInvalidBoundary(unnamedTop, {{"u", "u"}}, 0, "unnamed pins");
+
+  for (const SNLTerm::Direction direction : {SNLTerm::Direction::InOut,
+                                            SNLTerm::Direction::Undefined}) {
+    SCOPED_TRACE(direction.getString());
+    auto* block = SNLDesign::create(primitives_, SNLDesign::Type::Primitive);
+    SNLScalarTerm::create(block, direction, NLName("P"));
+    auto* top = SNLDesign::create(designs_);
+    SNLInstance::create(top, block, NLName("u"));
+    expectInvalidBoundary(top, {{"u", "u"}}, 0, "unsupported direction");
+  }
+}
+
+TEST_F(DesignBoundaryTests, RejectsScalarAndBusBundleMembers) {
+  for (const bool busMember : {false, true}) {
+    SCOPED_TRACE(busMember);
+    auto* block = SNLDesign::create(primitives_, SNLDesign::Type::Primitive);
+    auto* bundle = SNLBundleTerm::create(
+        block, SNLTerm::Direction::Output, NLName("BUNDLE"));
+    if (busMember) {
+      SNLBusTerm::create(bundle, SNLTerm::Direction::Output, 1, 0, NLName("Y"));
+    } else {
+      SNLScalarTerm::create(bundle, SNLTerm::Direction::Output, NLName("Y"));
+    }
+    auto* top = SNLDesign::create(designs_);
+    SNLInstance::create(top, block, NLName("u"));
+    expectInvalidBoundary(top, {{"u", "u"}}, 0, "bundled boundary pins");
+    EXPECT_NE(nullptr, top->getInstance(NLName("u")));
+  }
+}
+
+TEST_F(DesignBoundaryTests, RejectsTopAndAncestorSyntheticTermCollisions) {
+  auto* block = createScalarBlock("BLOCK", {}, {"Y"});
+  const NLName syntheticName("__kepler_boundary_p0_n59_bp0");
+  auto* directTop = SNLDesign::create(designs_, NLName("direct_top"));
+  SNLInstance::create(directTop, block, NLName("u"));
+  SNLScalarTerm::create(directTop, SNLTerm::Direction::Input, syntheticName);
+  const size_t libraryCount = db_->getGlobalLibraries().size();
+  expectInvalidBoundary(
+      directTop, {{"u", "u"}}, 0, "top term collides with existing term");
+
+  auto* wrapper = SNLDesign::create(designs_, NLName("wrapper"));
+  SNLInstance::create(wrapper, block, NLName("leaf"));
+  SNLScalarTerm::create(wrapper, SNLTerm::Direction::Input, syntheticName);
+  auto* nestedTop = SNLDesign::create(designs_, NLName("nested_top"));
+  SNLInstance::create(nestedTop, wrapper, NLName("wrap"));
+  expectInvalidBoundary(
+      nestedTop, {{"wrap/leaf", "wrap/leaf"}}, 0, "collides in ancestor model");
+
+  EXPECT_EQ(libraryCount, db_->getGlobalLibraries().size());
+  EXPECT_NE(nullptr, directTop->getInstance(NLName("u")));
+  EXPECT_NE(nullptr, wrapper->getInstance(NLName("leaf")));
+}
+
+TEST_F(DesignBoundaryTests, MovesTransferScratchOwnershipAndRejectStaleAccess) {
+  auto* block = createScalarBlock("BLOCK", {}, {"Y"});
+  auto* top = SNLDesign::create(designs_, NLName("top"));
+  SNLInstance::create(top, block, NLName("u"));
+  const size_t libraryCount = db_->getGlobalLibraries().size();
+  {
+    BoundaryDesign source(top, {{"u", "u"}}, 0);
+    auto* scratchTop = source.getTop();
+    const auto portName = source.getPorts().front().topTermName;
+    BoundaryDesign moved(std::move(source));
+    EXPECT_EQ(nullptr, source.getTop());
+    EXPECT_THROW(source.getPorts(), std::logic_error);
+    EXPECT_EQ(scratchTop, moved.getTop());
+    EXPECT_EQ(portName, moved.getPorts().front().topTermName);
+
+    BoundaryDesign destination(top, {{"u", "u"}}, 0);
+    EXPECT_EQ(libraryCount + 2, db_->getGlobalLibraries().size());
+    destination = std::move(moved);
+    EXPECT_EQ(nullptr, moved.getTop());
+    EXPECT_THROW(moved.getPorts(), std::logic_error);
+    EXPECT_EQ(scratchTop, destination.getTop());
+    EXPECT_EQ(portName, destination.getPorts().front().topTermName);
+    EXPECT_EQ(libraryCount + 1, db_->getGlobalLibraries().size());
+  }
+  EXPECT_EQ(libraryCount, db_->getGlobalLibraries().size());
+  EXPECT_NE(nullptr, top->getInstance(NLName("u")));
+}
+
+TEST_F(DesignBoundaryTests, RestoresPreviousUniverseTopAcrossDatabases) {
+  auto* otherDB = NLDB::create(universe_);
+  auto* otherLibrary = NLLibrary::create(otherDB, NLName("other"));
+  auto* otherTop = SNLDesign::create(otherLibrary, NLName("other_top"));
+  universe_->setTopDesign(otherTop);
+  auto* top = SNLDesign::create(designs_, NLName("top"));
+  db_->setTopDesign(top);
+
+  {
+    BoundaryDesign boundary(top, {}, 0);
+    universe_->setTopDesign(boundary.getTop());
+    ASSERT_EQ(db_, universe_->getTopDB());
+  }
+  EXPECT_EQ(top, db_->getTopDesign());
+  EXPECT_EQ(otherDB, universe_->getTopDB());
+  EXPECT_EQ(otherTop, universe_->getTopDesign());
+}
+
+TEST_F(DesignBoundaryTests, RejectsMissingKeysSyntheticNamesAndRightDuplicates) {
+  BoundaryPort port;
+  port.pairIndex = 1;
+  port.pinName = "A";
+  port.bit = -1;
+  port.isInput = true;
+  port.width = 2;
+  port.msb = 0;
+  port.lsb = -1;
+  port.topTermName = "boundary_a_minus1";
+
+  auto wrongPair = port;
+  wrongPair.pairIndex = 2;
+  EXPECT_THROW(validateBoundaryInterfaces({port}, {wrongPair}),
+               std::invalid_argument);
+  auto wrongPin = port;
+  wrongPin.pinName = "B";
+  EXPECT_THROW(validateBoundaryInterfaces({port}, {wrongPin}),
+               std::invalid_argument);
+  auto wrongBit = port;
+  wrongBit.bit = 0;
+  EXPECT_THROW(validateBoundaryInterfaces({port}, {wrongBit}),
+               std::invalid_argument);
+  auto wrongName = port;
+  wrongName.topTermName = "different_boundary_name";
+  EXPECT_THROW(validateBoundaryInterfaces({port}, {wrongName}),
+               std::invalid_argument);
+  auto wrongWidth = port;
+  wrongWidth.width = 3;
+  EXPECT_THROW(validateBoundaryInterfaces({port}, {wrongWidth}),
+               std::invalid_argument);
+  auto wrongLSB = port;
+  wrongLSB.lsb = -2;
+  EXPECT_THROW(validateBoundaryInterfaces({port}, {wrongLSB}),
+               std::invalid_argument);
+  EXPECT_THROW(validateBoundaryInterfaces({port}, {port, port}),
+               std::invalid_argument);
+  EXPECT_NO_THROW(validateBoundaryInterfaces({}, {}));
 }
 
 }  // namespace

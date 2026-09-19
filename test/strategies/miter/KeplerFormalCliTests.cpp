@@ -5950,3 +5950,156 @@ TEST_F(KeplerFormalCliTests, SnlScopesDumpCnfUsesDefaultScopedPath) {
   std::filesystem::remove_all(defaultPoCnfPath);
   std::filesystem::remove_all(fixture.tmpDir);
 }
+
+TEST_F(KeplerFormalCliTests, ConfigSetAsBoundaryRejectsMalformedPairValues) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module child(input i, output o); assign o = i; endmodule\n"
+      "module top(input a, output y); child u(.i(a), .o(y)); endmodule\n");
+  const std::vector<std::string> invalidValues = {
+      "u", "{}", "[[u]]", "[[u, u, u]]",
+      "[[[], u]]", "[[u, {}]]", "[['', u]]", "[[u, '']]"};
+  for (const auto& value : invalidValues) {
+    SCOPED_TRACE(value);
+    const auto cfgPath = writeTempConfig(
+        "format: verilog\n"
+        "input_paths:\n"
+        "  - " + fixture.design0Path.string() + "\n"
+        "  - " + fixture.design1Path.string() + "\n"
+        "set_as_boundary: " + value + "\n");
+    const auto run = runStructuredWithConfigFile(cfgPath);
+    EXPECT_EQ(run.exitCode, EXIT_FAILURE);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Error);
+    EXPECT_EQ(NLUniverse::get(), nullptr);
+    std::filesystem::remove(cfgPath);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSetAsBoundaryRejectsScopeOperations) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module child(input i, output o); assign o = i; endmodule\n"
+      "module top(input a, output y); child u(.i(a), .o(y)); endmodule\n");
+  for (const auto& scopeOption : {"use_scopes", "clean_scopes"}) {
+    SCOPED_TRACE(scopeOption);
+    const auto cfgPath = writeTempConfig(
+        "format: verilog\n"
+        "input_paths:\n"
+        "  - " + fixture.design0Path.string() + "\n"
+        "  - " + fixture.design1Path.string() + "\n"
+        "set_as_boundary: [[u, u]]\n" + scopeOption + ": true\n");
+    const auto run = runStructuredWithConfigFile(cfgPath);
+    EXPECT_EQ(run.exitCode, EXIT_FAILURE);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Error);
+    EXPECT_EQ(NLUniverse::get(), nullptr);
+    std::filesystem::remove(cfgPath);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliSetAsBoundaryBothAliasesBeforeFormat) {
+  const auto fixture = createDesignFixture(
+      "v",
+      "module child(input i, output o); assign o = 1'b0; endmodule\n"
+      "module top(input a, output y); child left(.i(a), .o(y)); endmodule\n",
+      "module child(input i, output o); assign o = 1'b1; endmodule\n"
+      "module top(input a, output y); child right(.i(a), .o(y)); endmodule\n");
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(fixture.tmpDir);
+    for (const auto& flag : {"--set-as-boundary", "--set_as_boundary"}) {
+      SCOPED_TRACE(flag);
+      const auto run = runStructuredWithArgs(
+          {"kepler-formal", flag, "left", "right", "-verilog",
+           fixture.design0Path.string(), fixture.design1Path.string()});
+      EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+      EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+    }
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliSetAsBoundaryBeforeFormatRequiresBothPaths) {
+  for (const auto& flag : {"--set-as-boundary", "--set_as_boundary"}) {
+    for (bool includeFirstPath : {false, true}) {
+      SCOPED_TRACE(flag);
+      SCOPED_TRACE(includeFirstPath);
+      std::vector<std::string> args = {"kepler-formal", flag};
+      if (includeFirstPath) {
+        args.emplace_back("u");
+      }
+      const auto run = runStructuredWithArgs(std::move(args));
+      EXPECT_EQ(run.exitCode, EXIT_FAILURE);
+      EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Error);
+    }
+  }
+}
+
+TEST_F(KeplerFormalCliTests, CliSetAsBoundaryRejectsEitherEmptyPath) {
+  for (const auto& flag : {"--set-as-boundary", "--set_as_boundary"}) {
+    for (bool beforeFormat : {false, true}) {
+      for (bool emptyLeft : {false, true}) {
+        SCOPED_TRACE(flag);
+        SCOPED_TRACE(beforeFormat);
+        SCOPED_TRACE(emptyLeft);
+        std::vector<std::string> args = {"kepler-formal"};
+        const std::vector<std::string> inputArgs = {
+            "-verilog", "design0.v", "design1.v"};
+        if (!beforeFormat) {
+          args.insert(args.end(), inputArgs.begin(), inputArgs.end());
+        }
+        args.insert(args.end(), {flag, emptyLeft ? "" : "u",
+                                 emptyLeft ? "u" : ""});
+        if (beforeFormat) {
+          args.insert(args.end(), inputArgs.begin(), inputArgs.end());
+        }
+        const auto run = runStructuredWithArgs(std::move(args));
+        EXPECT_EQ(run.exitCode, EXIT_FAILURE);
+        EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Error);
+      }
+    }
+  }
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliCompactSetAsBoundaryFailureReleasesDesignsAndAllowsAnotherRun) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module child(input i, output o); assign o = i; endmodule\n"
+      "module top(input a, output y); child u(.i(a), .o(y)); endmodule\n");
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(fixture.tmpDir);
+    for (bool sec : {false, true}) {
+      for (bool failFirstDesign : {false, true}) {
+        SCOPED_TRACE(sec);
+        SCOPED_TRACE(failFirstDesign);
+        std::vector<std::string> args = {"kepler-formal"};
+        if (sec) {
+          args.insert(args.end(), {"-v", "sec", "--sec-engine", "k_induction",
+                                   "--sec-encoding", "binary", "-k", "1"});
+        }
+        args.insert(args.end(),
+                    {"-verilog", fixture.design0Path.string(),
+                     fixture.design1Path.string(), "--compact",
+                     "--set-as-boundary", failFirstDesign ? "missing" : "u",
+                     failFirstDesign ? "u" : "missing"});
+        const auto failed = runStructuredWithArgs(args);
+        EXPECT_EQ(failed.exitCode, EXIT_FAILURE);
+        EXPECT_EQ(failed.result.status, KEPLER_FORMAL::RunStatus::Error);
+        EXPECT_EQ(NLUniverse::get(), nullptr);
+
+        // Retry in the same process: neither the partially loaded design nor
+        // the first side's released compact snapshot may poison the next run.
+        args[args.size() - 2] = "u";
+        args.back() = "u";
+        const auto recovered = runStructuredWithArgs(std::move(args));
+        EXPECT_EQ(recovered.exitCode, EXIT_SUCCESS);
+        EXPECT_EQ(recovered.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+        EXPECT_EQ(NLUniverse::get(), nullptr);
+      }
+    }
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
