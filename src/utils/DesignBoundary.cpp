@@ -287,6 +287,11 @@ std::vector<BoundarySpec> preflight(SNLDesign* top,
   std::set<std::string> generatedTopNames;
   for (auto& spec : specs) {
     SNLInstance* target = resolveInstance(top, spec.components, spec.path);
+    if (!target->getModel()->getInstances().empty()) {
+      throw std::invalid_argument(
+          "boundary instance " + quote(spec.path) +
+          " is not a leaf: its model contains child instances");
+    }
     for (SNLInstTerm* instTerm : target->getInstTerms()) {
       SNLBitTerm* bitTerm = instTerm->getBitTerm();
       const auto direction = bitTerm->getDirection();
@@ -369,100 +374,42 @@ BoundarySelection::BoundarySelection(SNLDesign* top,
   }
 }
 
-const BoundaryPort* LogicalBoundary::getPort(DNLID id) const {
+const BoundaryPort* LeafBoundary::getPort(DNLID id) const {
   const auto found = portIndices_.find(id);
   return found == portIndices_.end() ? nullptr : &ports_[found->second];
 }
 
-LogicalBoundary::LogicalBoundary(const naja::DNL::DNLFull& dnl,
-                                 const BoundaryPairs& pairs, size_t side) {
+LeafBoundary::LeafBoundary(const naja::DNL::DNLFull& dnl,
+                           const BoundaryPairs& pairs, size_t side) {
   using namespace naja::DNL;
   const auto specs = preflight(
       const_cast<SNLDesign*>(dnl.getTop().getSNLModel()), pairs, side);
-  excluded_.resize(dnl.getDNLInstances().size(), false);
   for (const auto& spec : specs) {
     const DNLInstanceFull* instance = &dnl.getTop();
     for (const auto& component : spec.components) {
       instance = &instance->getChildInstance(
           instance->getSNLModel()->getInstance(NLName(component)));
     }
-    for (const auto& candidate : dnl.getDNLInstances()) {
-      if (!candidate.isNull() && candidate.isUnder(*instance)) {
-        excluded_[candidate.getID()] = true;
-      }
-    }
+    instances_.insert(instance->getID());
     for (const auto& pin : spec.pins) {
-      const DNLID id = instance->getTerminalFromBitTerm(pin.term).getID();
+      const auto& term = instance->getTerminalFromBitTerm(pin.term);
+      const DNLID id = term.getID();
+      // Leaf outputs must remain actual drivers in the original flattened DNL.
+      // Internal wire aliases or constant nets cannot be overridden by PI flags.
+      // An unconnected output needs no iso: it is an unused free input.
+      if (!pin.port.isInput && term.getIsoID() != DNLID_MAX) {
+        const auto& iso = dnl.getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+        if (iso.isConstant() || iso.getDrivers().size() != 1 ||
+            iso.getDrivers().front() != id) {
+          throw std::invalid_argument(
+              "boundary leaf output " + quote(spec.path + "/" + pin.port.pinName) +
+              " must be the sole nonconstant driver of its DNL iso");
+        }
+      }
       portIndices_.emplace(id, ports_.size());
       ports_.push_back(pin.port);
       (pin.port.isInput ? outputs_ : inputs_).push_back(id);
     }
-  }
-
-  // Union terminals only across nets outside the selected occurrences.
-  // A hierarchical terminal joins parent/child nets normally; omitting the
-  // selected model's nets turns its pins into a directional logical boundary.
-  const size_t count = dnl.getNBterms();
-  signalIDs_.resize(count);
-  for (DNLID id = 0; id < count; ++id) signalIDs_[id] = id;
-  auto root = [&](DNLID id) {
-    while (signalIDs_[id] != id) {
-      signalIDs_[id] = signalIDs_[signalIDs_[id]];
-      id = signalIDs_[id];
-    }
-    return id;
-  };
-  std::vector<std::pair<DNLID, DNLIso::IsoType>> constants;
-  for (const auto& instance : dnl.getDNLInstances()) {
-    if (instance.isNull() || containsInstance(instance.getID()) ||
-        instance.getSNLModel()->isAssign()) continue;
-    for (const auto* net : instance.getSNLModel()->getBitNets()) {
-      DNLID first = DNLID_MAX;
-      auto join = [&](DNLID id) {
-        if (first == DNLID_MAX) first = id;
-        else signalIDs_[root(id)] = root(first);
-      };
-      for (const auto* term : net->getBitTerms()) {
-        join(instance.getTerminalFromBitTerm(term).getID());
-      }
-      for (const auto* term : net->getInstTerms()) {
-        join(instance.getChildInstance(term->getInstance())
-                 .getTerminal(term).getID());
-      }
-      if (first != DNLID_MAX && net->isConstant()) {
-        constants.emplace_back(first,
-            net->isConstant0() ? DNLIso::CONST0 :
-            net->isConstant1() ? DNLIso::CONST1 :
-            net->isConstantX() ? DNLIso::CONSTX : DNLIso::CONSTZ);
-      }
-    }
-  }
-  signals_.resize(count);
-  for (DNLID id = 0; id < count; ++id) {
-    const auto signalID = root(id);
-    signalIDs_[id] = signalID;
-    auto& signal = signals_[signalID];
-    signal.setId(signalID);
-    const auto& term = dnl.getDNLTerminalFromID(id);
-    const auto& instance = term.getDNLInstance();
-    if (containsInstance(instance.getID()) && !getPort(id)) continue;
-    const auto direction = term.getSnlBitTerm()->getDirection();
-    if (isInput(id) ||
-        (instance.isTop() && direction != SNLTerm::Direction::Output) ||
-        (!containsInstance(instance.getID()) && !instance.isTop() &&
-         instance.getSNLModel()->getInstances().empty() &&
-         direction != SNLTerm::Direction::Input)) {
-      signal.addDriver(id);
-    } else {
-      signal.addReader(id);
-    }
-  }
-  for (const auto& [id, type] : constants) {
-    auto& signal = signals_[signalIDs_[id]];
-    if (signal.isConstant() && signal.getType() != type) {
-      throw std::invalid_argument("conflicting constants outside boundary");
-    }
-    signal.setIsoType(type);
   }
 }
 

@@ -39,14 +39,6 @@ namespace KEPLER_FORMAL::SEC {
 
 namespace {
 
-const naja::DNL::DNLIso& signalForTerm(
-    naja::DNL::DNLFull* dnl,
-    const naja::DNL::DNLTerminalFull& term,
-    const LogicalBoundary* boundary) {
-  return boundary ? boundary->getSignal(term.getID())
-                  : dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
-}
-
 struct PendingPinTerm {
   naja::DNL::DNLID termID = naja::DNL::DNLID_MAX;
   naja::NL::NLID::Bit bit = 0;
@@ -155,13 +147,12 @@ bool isPotentialClockTreeBufferCell(const naja::DNL::DNLTerminalFull& term);
 
 std::optional<naja::DNL::DNLID> getClockTreeBufferSourceDriverTerm(
     naja::DNL::DNLFull* dnl,
-    const naja::DNL::DNLTerminalFull& outputTerm,
-    const LogicalBoundary* boundary);
+    const naja::DNL::DNLTerminalFull& outputTerm);
 
 bool hasBuildableCombinationalRoot(
     naja::DNL::DNLFull* dnl,
     naja::DNL::DNLID requestedTermID,
-    const LogicalBoundary* boundary) {
+    const LeafBoundary* boundary) {
   if (dnl == nullptr || requestedTermID == naja::DNL::DNLID_MAX) {
     // LCOV_EXCL_START
     return false;  // LCOV_EXCL_LINE
@@ -190,12 +181,12 @@ bool hasBuildableCombinationalRoot(
     if (currentTerm.getSnlBitTerm()->getDirection() !=
         naja::NL::SNLBitTerm::Direction::Output) {
       const auto isoID = currentTerm.getIsoID();
-      if (!boundary && isoID == naja::DNL::DNLID_MAX) {
+      if (isoID == naja::DNL::DNLID_MAX) {
         // LCOV_EXCL_START
         return false;  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
       }
-      const auto& iso = signalForTerm(dnl, currentTerm, boundary);
+      const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
       if (iso.isConstant()) {
         // LCOV_EXCL_START
         return true;  // LCOV_EXCL_LINE
@@ -218,7 +209,7 @@ bool hasBuildableCombinationalRoot(
     if (isClockTreeBufferCell(currentTerm)) {
       // LCOV_EXCL_START
       if (const auto sourceDriver =  // LCOV_EXCL_LINE
-              getClockTreeBufferSourceDriverTerm(dnl, currentTerm, boundary)) {  // LCOV_EXCL_LINE
+              getClockTreeBufferSourceDriverTerm(dnl, currentTerm)) {  // LCOV_EXCL_LINE
         currentTermID = *sourceDriver;  // LCOV_EXCL_LINE
         continue;  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
@@ -247,14 +238,13 @@ bool hasBuildableCombinationalRoot(
           // LCOV_EXCL_STOP
         }
         const auto& inputTerm = instance.getTerminalFromBitTerm(inputBitTerm);
-        if (inputTerm.isNull() ||
-            (!boundary && inputTerm.getIsoID() == naja::DNL::DNLID_MAX)) {
+        if (inputTerm.isNull() || inputTerm.getIsoID() == naja::DNL::DNLID_MAX) {
           // LCOV_EXCL_START
           passthroughDriver.reset();  // LCOV_EXCL_LINE
           break;  // LCOV_EXCL_LINE
           // LCOV_EXCL_STOP
         }
-        const auto& iso = signalForTerm(dnl, inputTerm, boundary);
+        const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(inputTerm.getIsoID());
         if (iso.isConstant() || iso.getDrivers().size() != 1) {
           passthroughDriver.reset();
           break;
@@ -351,8 +341,7 @@ BuiltObservedExpr buildObservedExprForTerm(  // LCOV_EXCL_LINE
     const std::unordered_map<naja::DNL::DNLID, BoolExpr*>& outputExprByTerm,
     const std::vector<naja::DNL::DNLID>& inputTerms,
     const std::vector<naja::DNL::DNLID>& outputTerms,
-    const std::vector<size_t>& termDNLID2varID,
-    const LogicalBoundary* boundary) {
+    const std::vector<size_t>& termDNLID2varID) {
   // LCOV_EXCL_START
   BuiltObservedExpr result;  // LCOV_EXCL_LINE
   if (const auto exprIt = outputExprByTerm.find(termID);  // LCOV_EXCL_LINE
@@ -407,7 +396,7 @@ BuiltObservedExpr buildObservedExprForTerm(  // LCOV_EXCL_LINE
         isPIs,  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
         localIsPOs,
-        true, boundary);
+        true);
     // LCOV_EXCL_START
     cloud.compute();  // LCOV_EXCL_LINE
     if (cloud.getTruthTable().isValid()) {  // LCOV_EXCL_LINE
@@ -434,7 +423,7 @@ BuiltObservedExpr buildObservedExprForTerm(  // LCOV_EXCL_LINE
       // LCOV_EXCL_START
       cloud.getTruthTable().finalize();  // LCOV_EXCL_LINE
       localResult.expr =  // LCOV_EXCL_LINE
-          KEPLER_FORMAL::Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID, boundary);  // LCOV_EXCL_LINE
+          KEPLER_FORMAL::Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID);  // LCOV_EXCL_LINE
       cloud.destroy();  // LCOV_EXCL_LINE
       return localResult;  // LCOV_EXCL_LINE
       // LCOV_EXCL_STOP
@@ -533,7 +522,7 @@ BuiltObservedExpr buildObservedExprForTerm(  // LCOV_EXCL_LINE
     // LCOV_EXCL_STOP
         naja::NL::SNLBitTerm::Direction::Output) {
       // LCOV_EXCL_START
-      if (!boundary && term.getIsoID() == naja::DNL::DNLID_MAX) {  // LCOV_EXCL_LINE
+      if (term.getIsoID() == naja::DNL::DNLID_MAX) {  // LCOV_EXCL_LINE
         localResult.connectivitySkip = ConnectivitySkipInfo{  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
             ConnectivitySkipOrigin::NoDriver,
@@ -544,7 +533,7 @@ BuiltObservedExpr buildObservedExprForTerm(  // LCOV_EXCL_LINE
       }
 
       // LCOV_EXCL_START
-      const auto& iso = signalForTerm(dnl, term, boundary);
+      const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());  // LCOV_EXCL_LINE
       if (iso.isConstant0()) {  // LCOV_EXCL_LINE
         localResult.expr = BoolExpr::createFalse();  // LCOV_EXCL_LINE
         return localResult;  // LCOV_EXCL_LINE
@@ -692,12 +681,12 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
     bool secDiagEnabled,
     const char* topName,
     const char* phaseLabel,
-    const LogicalBoundary* boundary) {
+    const LeafBoundary* boundary) {
   MaterializedBuilderOutputs result;
 
   KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
   builder.setRetainDnl(true);
-  builder.setLogicalBoundary(boundary);
+  builder.setLeafBoundary(boundary);
   builder.setStopAtOpaqueInternalOutputs(true);
   std::vector<naja::DNL::DNLID> normalizedRoots;
   normalizedRoots.reserve(requestedOutputs.size());
@@ -741,7 +730,7 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
           naja::NL::SNLBitTerm::Direction::Output) {
         if (isClockTreeBufferCell(currentTerm)) {
           if (const auto sourceDriver =
-                  getClockTreeBufferSourceDriverTerm(dnl, currentTerm, boundary)) {
+                  getClockTreeBufferSourceDriverTerm(dnl, currentTerm)) {
             ++clockBufferRootPassthroughs;
             currentTermID = *sourceDriver;
             continue;
@@ -764,14 +753,14 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
               // LCOV_EXCL_STOP
             }
             const auto& inputTerm = inst.getTerminalFromBitTerm(inputBitTerm);
-            if (inputTerm.isNull() ||
-                (!boundary && inputTerm.getIsoID() == naja::DNL::DNLID_MAX)) {
+            if (inputTerm.isNull() || inputTerm.getIsoID() == naja::DNL::DNLID_MAX) {
               // LCOV_EXCL_START
               passthroughDriver.reset();  // LCOV_EXCL_LINE
               break;  // LCOV_EXCL_LINE
               // LCOV_EXCL_STOP
             }
-            const auto& iso = signalForTerm(dnl, inputTerm, boundary);
+            const auto& iso =
+                dnl->getDNLIsoDB().getIsoFromIsoIDconst(inputTerm.getIsoID());
             if (iso.isConstant() || iso.getDrivers().size() != 1) {
               passthroughDriver.reset();
               break;
@@ -793,12 +782,12 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
       }
 
       const auto isoID = currentTerm.getIsoID();
-      if (!boundary && isoID == naja::DNL::DNLID_MAX) {
+      if (isoID == naja::DNL::DNLID_MAX) {
         // LCOV_EXCL_START
         return std::nullopt;  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
       }
-      const auto& iso = signalForTerm(dnl, currentTerm, boundary);
+      const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
       if (iso.isConstant0() || iso.isConstant1()) {
         return currentTermID;
       }
@@ -1893,19 +1882,17 @@ std::optional<naja::DNL::DNLID> getSingleInputDriverTerm(
 // LCOV_EXCL_STOP
     naja::DNL::DNLFull* dnl,
     const naja::DNL::DNLInstanceFull& instance,
-    const naja::NL::SNLBitTerm* inputBitTerm,
-    const LogicalBoundary* boundary) {
+    const naja::NL::SNLBitTerm* inputBitTerm) {
   if (dnl == nullptr || inputBitTerm == nullptr) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
 
   const auto& inputTerm = instance.getTerminalFromBitTerm(inputBitTerm);
-  if (inputTerm.isNull() ||
-      (!boundary && inputTerm.getIsoID() == naja::DNL::DNLID_MAX)) {
+  if (inputTerm.isNull() || inputTerm.getIsoID() == naja::DNL::DNLID_MAX) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
 
-  const auto& iso = signalForTerm(dnl, inputTerm, boundary);
+  const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(inputTerm.getIsoID());
   if (iso.isConstant() || iso.getDrivers().size() != 1) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
@@ -1915,8 +1902,7 @@ std::optional<naja::DNL::DNLID> getSingleInputDriverTerm(
 
 std::optional<naja::DNL::DNLID> getClockTreeBufferSourceDriverTerm(
     naja::DNL::DNLFull* dnl,
-    const naja::DNL::DNLTerminalFull& outputTerm,
-    const LogicalBoundary* boundary) {
+    const naja::DNL::DNLTerminalFull& outputTerm) {
   if (dnl == nullptr || outputTerm.isNull()) {
     return std::nullopt;  // LCOV_EXCL_LINE
   }
@@ -1928,7 +1914,7 @@ std::optional<naja::DNL::DNLID> getClockTreeBufferSourceDriverTerm(
         inputBitTerm->getDirection() == naja::NL::SNLBitTerm::Direction::Output) {
       return;
     }
-    if (const auto driver = getSingleInputDriverTerm(dnl, instance, inputBitTerm, boundary)) {
+    if (const auto driver = getSingleInputDriverTerm(dnl, instance, inputBitTerm)) {
       sourceDrivers.push_back(*driver);
     }
   };
@@ -2067,7 +2053,7 @@ size_t expandClockCarrierVarIDsFromTermNames(
     naja::DNL::DNLFull* dnl,
     const std::vector<size_t>& termDNLID2varID,
     std::unordered_set<size_t>& clockCarrierVarIDs,
-    const LogicalBoundary* boundary) {
+    const LeafBoundary* boundary) {
   if (dnl == nullptr) {
     return 0;  // LCOV_EXCL_LINE
   }
@@ -2174,7 +2160,7 @@ size_t expandClockCarrierVarIDsFromPureClockTermExprs(
 class PureClockCarrierStructureIndex {
  public:
   explicit PureClockCarrierStructureIndex(naja::DNL::DNLFull* dnl,
-                                         const LogicalBoundary* boundary)
+                                         const LeafBoundary* boundary)
       : dnl_(dnl), boundary_(boundary),
         pureClockMemoStrict_(dnl == nullptr ? 0 : dnl->getNBterms(), -1),
         pureClockMemoAfterNamedClockTree_(
@@ -2264,10 +2250,10 @@ class PureClockCarrierStructureIndex {
     if (term.getSnlBitTerm()->getDirection() !=
         naja::NL::SNLBitTerm::Direction::Output) {
       const auto isoID = term.getIsoID();
-      if (!boundary_ && isoID == naja::DNL::DNLID_MAX) {
+      if (isoID == naja::DNL::DNLID_MAX) {
         return false;  // LCOV_EXCL_LINE
       }
-      const auto& iso = signalForTerm(dnl_, term, boundary_);
+      const auto& iso = dnl_->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
       if (iso.isConstant() || iso.getDrivers().size() != 1) {
         return false;
       }
@@ -2283,7 +2269,7 @@ class PureClockCarrierStructureIndex {
 
     if (isPotentialClockTreeBufferCell(term)) {
       const auto sourceDriver =
-          getClockTreeBufferSourceDriverTerm(dnl_, term, boundary_);
+          getClockTreeBufferSourceDriverTerm(dnl_, term);
       const bool result = sourceDriver.has_value() &&
                           isPureClockCarrier(*sourceDriver, true);
       cached = result ? 1 : 0;
@@ -2295,7 +2281,7 @@ class PureClockCarrierStructureIndex {
       // tree. Once a named clock-tree branch has been seen, permit transparent
       // single-input cells to bridge that root back to the top clock.
       const auto sourceDriver =
-          getClockTreeBufferSourceDriverTerm(dnl_, term, boundary_);
+          getClockTreeBufferSourceDriverTerm(dnl_, term);
       const bool result = sourceDriver.has_value() &&
                           isPureClockCarrier(*sourceDriver, true);
       cached = result ? 1 : 0;
@@ -2306,7 +2292,7 @@ class PureClockCarrierStructureIndex {
   }
 
   naja::DNL::DNLFull* dnl_ = nullptr;
-  const LogicalBoundary* boundary_ = nullptr;
+  const LeafBoundary* boundary_ = nullptr;
   std::vector<int8_t> pureClockMemoStrict_;
   std::vector<int8_t> pureClockMemoAfterNamedClockTree_;
   std::vector<naja::DNL::DNLID> pureClockCarrierTermIDs_;
@@ -2323,7 +2309,7 @@ struct ExtractContext {
   KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
   // LCOV_EXCL_STOP
   decltype(naja::DNL::get()) dnl = nullptr;
-  const LogicalBoundary* boundary = nullptr;
+  const LeafBoundary* boundary = nullptr;
   std::unordered_map<naja::DNL::DNLID, SignalKey> inputKeyByTerm;
   std::unordered_map<naja::DNL::DNLID, SignalKey> topOutputKeyByTerm;
   // LCOV_EXCL_START
@@ -2448,7 +2434,7 @@ void collectInitialBuilderBoundary(ExtractContext& ctx) {
   }
 
   ctx.dnl = naja::DNL::get();
-  ctx.boundary = ctx.builder.getLogicalBoundary();
+  ctx.boundary = ctx.builder.getLeafBoundary();
 }
 
 SignalKey boundaryPortKey(const BoundaryPort& port) {
@@ -2513,8 +2499,8 @@ void skipTopOutputsReachedByOpaqueTerminals(
     ExtractContext& ctx,
     SequentialDesignModel& model) {
   if (ctx.boundary) {
-    // The physical-net fanout check can cross a selected boundary. Logical
-    // output and transition clouds report opaque dependencies without doing so.
+    // The fanout precheck follows cell arcs across selected leaves. Let the
+    // PI/PO clouds report opaque dependencies while stopping at those leaves.
     ctx.hasOpaqueInternalTerminals = std::any_of(
         model.connectivitySkipInfoByKey.begin(), model.connectivitySkipInfoByKey.end(),
         [](const auto& item) {
@@ -2868,40 +2854,39 @@ naja::DNL::DNLID getRequiredInstanceTermID(
   return termIt->second;
 }  // LCOV_EXCL_LINE
 
-bool isNoDriverTerm(naja::DNL::DNLID termID, const LogicalBoundary* boundary) {
+bool isNoDriverTerm(naja::DNL::DNLID termID) {
   auto* dnl = naja::DNL::get();
   if (dnl == nullptr || termID == naja::DNL::DNLID_MAX) {
     return true;  // LCOV_EXCL_LINE
   }
   const auto& term = dnl->getDNLTerminalFromID(termID);
-  if (term.isNull() || (!boundary && term.getIsoID() == naja::DNL::DNLID_MAX)) {
+  if (term.isNull() || term.getIsoID() == naja::DNL::DNLID_MAX) {
     return true;  // LCOV_EXCL_LINE
   }
-  const auto& iso = signalForTerm(dnl, term, boundary);
+  const auto& iso = dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
   return !iso.isConstant() && iso.getDrivers().empty();
 }
 
-bool isConstantZeroTerm(naja::DNL::DNLID termID, const LogicalBoundary* boundary) {
+bool isConstantZeroTerm(naja::DNL::DNLID termID) {
   auto* dnl = naja::DNL::get();
   if (dnl == nullptr || termID == naja::DNL::DNLID_MAX) {
     return false;  // LCOV_EXCL_LINE
   }
   const auto& term = dnl->getDNLTerminalFromID(termID);
-  if (term.isNull() || (!boundary && term.getIsoID() == naja::DNL::DNLID_MAX)) {
+  if (term.isNull() || term.getIsoID() == naja::DNL::DNLID_MAX) {
     return false;  // LCOV_EXCL_LINE
   }
-  return signalForTerm(dnl, term, boundary).isConstant0();
+  return dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).isConstant0();
 }
 
-bool isDisabledMemoryWriteEnable(naja::DNL::DNLID termID,
-                                const LogicalBoundary* boundary) {
+bool isDisabledMemoryWriteEnable(naja::DNL::DNLID termID) {
   // Some lowered memories expose fixed-width write ports even when a
   // particular port is unused by the RTL. In that shape the enable pin can
   // have a net but no leaf driver; treating it as an active symbolic input
   // would pull unrelated address/data cones into the SEC memory transition.
   // A constant-0 or undriven enable cannot assert in the concrete netlist, so
   // the whole write port is semantically inactive and should be ignored.
-  return isConstantZeroTerm(termID, boundary) || isNoDriverTerm(termID, boundary);
+  return isConstantZeroTerm(termID) || isNoDriverTerm(termID);
 }
 
 void appendPendingMemoryInstance(
@@ -2986,9 +2971,7 @@ void appendPendingMemoryInstance(
     if (std::any_of(
             enableTermIDs.begin(),
             enableTermIDs.end(),
-            [&](auto termID) {
-              return isDisabledMemoryWriteEnable(termID, ctx.boundary);
-            })) {
+            isDisabledMemoryWriteEnable)) {
       continue;
     }
 
@@ -3431,8 +3414,7 @@ BuiltObservedExpr materializeStructuredMemoryTermExpr(
     // LCOV_EXCL_START
     const std::vector<naja::DNL::DNLID>& builderInputs,
     const std::vector<naja::DNL::DNLID>& builderOutputs,
-    const std::vector<size_t>& termDNLID2varID,
-    const LogicalBoundary* boundary) {
+    const std::vector<size_t>& termDNLID2varID) {
   BuiltObservedExpr result;
   // LCOV_EXCL_STOP
   if (const auto exprIt = outputExprByTerm.find(termID);
@@ -3474,7 +3456,7 @@ BuiltObservedExpr materializeStructuredMemoryTermExpr(
       outputExprByTerm,  // LCOV_EXCL_LINE
       builderInputs,  // LCOV_EXCL_LINE
       builderOutputs,  // LCOV_EXCL_LINE
-      termDNLID2varID, boundary);  // LCOV_EXCL_LINE
+      termDNLID2varID);  // LCOV_EXCL_LINE
   if (built.expr != nullptr) {  // LCOV_EXCL_LINE
     outputExprByTerm.emplace(termID, built.expr);  // LCOV_EXCL_LINE
     // LCOV_EXCL_START
@@ -3514,9 +3496,8 @@ bool isNoDriverSkippedStructuredMemoryTerm(
 bool isDisabledMemoryWriteEnable(
     naja::DNL::DNLID termID,
     const std::unordered_map<naja::DNL::DNLID, BuilderSkippedOutputInfo>&
-        skippedOutputsByTerm,
-    const LogicalBoundary* boundary) {
-  return isDisabledMemoryWriteEnable(termID, boundary) ||
+        skippedOutputsByTerm) {
+  return isDisabledMemoryWriteEnable(termID) ||
          isNoDriverSkippedStructuredMemoryTerm(termID, skippedOutputsByTerm);
 }
 
@@ -3555,7 +3536,7 @@ void buildStructuredMemoryTransitions(
               skippedOutputsByTerm,
               builderInputs,
               builderOutputs,
-              termDNLID2varID, ctx.boundary);
+              termDNLID2varID);
           if (built.expr != nullptr) {
             exprs.push_back(built.expr);
             return true;
@@ -3635,7 +3616,7 @@ void buildStructuredMemoryTransitions(
       exprs.maskExprs.reserve(writePort.maskTermIDs.size());
       exprs.enableExprs.reserve(writePort.enableTermIDs.size());
       for (const auto termID : writePort.enableTermIDs) {
-        if (isDisabledMemoryWriteEnable(termID, skippedOutputsByTerm, ctx.boundary)) {
+        if (isDisabledMemoryWriteEnable(termID, skippedOutputsByTerm)) {
           exprs.disabled = true;  // LCOV_EXCL_LINE
           break;  // LCOV_EXCL_LINE
         }

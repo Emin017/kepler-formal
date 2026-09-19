@@ -12,14 +12,12 @@
 #include <tbb/concurrent_unordered_map.h>
 
 namespace KEPLER_FORMAL {
-class LogicalBoundary;
 
 /// Convert a truth-table tree directly into a BoolExpr
 class Tree2BoolExpr {
  public:
   static BoolExpr* convert(const SNLTruthTableTree& tree,
-                                           const std::vector<size_t>& varNames,
-                                           const LogicalBoundary* boundary = nullptr);
+                                           const std::vector<size_t>& varNames);
   static tbb::concurrent_unordered_map<naja::DNL::DNLID, BoolExpr*> iso2boolExpr_;
 };
 

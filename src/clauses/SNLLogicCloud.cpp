@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "SNLLogicCloud.h"
-#include "DesignBoundary.h"
 #include <tbb/tbb_allocator.h>
 #include <cassert>
 #include <sstream>
@@ -642,12 +641,6 @@ bool SNLLogicCloud::isInput(naja::DNL::DNLID termID) {
   return PIs_[termID];
 }
 
-const DNLIso& SNLLogicCloud::getSignal(
-    DNLID termID, const std::shared_ptr<const std::vector<DNLID>>& termIsoIDs) const {
-  return boundary_ ? boundary_->getSignal(termID) :
-      dnl_.getDNLIsoDB().getIsoFromIsoIDconst(getIsoIDCached(termID, termIsoIDs));
-}
-
 bool SNLLogicCloud::isOutput(naja::DNL::DNLID termID) {
   return POs_[termID];
 }
@@ -1229,12 +1222,12 @@ naja::DNL::DNLID SNLLogicCloud::resolveTransparentLoopTarget(
     if (currentTerm.getSnlBitTerm()->getDirection() !=
         SNLBitTerm::Direction::Output) {
       const auto isoID = getIsoIDCached(currentTermID, termIsoIDs);
-      if (!boundary_ && isoID == naja::DNL::DNLID_MAX) {
+      if (isoID == naja::DNL::DNLID_MAX) {
         // LCOV_EXCL_START
         break;  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
       }
-      const auto& iso = getSignal(currentTermID, termIsoIDs);
+      const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(isoID);
       if (iso.isConstant() || iso.getDrivers().size() != 1) {
         break;
       }
@@ -1351,7 +1344,8 @@ void SNLLogicCloud::compute() {
   DEBUG_LOG("---- Begin!!\n");
   if (dnl_.getDNLTerminalFromID(seedOutputTerm_).isTopPort() ||
       isOutput(seedOutputTerm_)) {
-    const auto& iso = getSignal(seedOutputTerm_, termIsoIDs);
+    const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+        getIsoIDCached(seedOutputTerm_, termIsoIDs));
     // LCOV_EXCL_START
     if (iso.getDrivers().size() > 1) {
       #ifdef DEBUG_PRINTS
@@ -1482,7 +1476,8 @@ void SNLLogicCloud::compute() {
     size_t sizeOfNewInputs = newIterationInputs.size();
     for (size_t i = 0; i < sizeOfNewInputs; i++) {
       const auto input = newIterationInputs[i];
-      const auto& iso = getSignal(input, termIsoIDs);
+      const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+          getIsoIDCached(input, termIsoIDs));
       const bool cachedAsInput = canUseCachedIsoShortcut(iso, input);
       if (!isInput(input) && !cachedAsInput && !iso.isConstant()) {
         reachedPIs = false;
@@ -1507,7 +1502,8 @@ void SNLLogicCloud::compute() {
                                          sizeOfCurrentInputs);
     for (size_t i = 0; i < sizeOfCurrentInputs; i++) {
       const auto& input = currentIterationInputs[i];
-      const auto& iso = getSignal(input, termIsoIDs);
+      const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+          getIsoIDCached(input, termIsoIDs));
       if (isInput(input) || canUseCachedIsoShortcut(iso, input) ||
           iso.isConstant()) {
         newIterationInputs.emplace_back(input);
@@ -1718,7 +1714,8 @@ void SNLLogicCloud::compute() {
   assert(finalSize == currentIterationInputs_.size() &&
          "compute: size mismatch after final copy");
   for (const auto& input : currentIterationInputs_) {
-    const auto& iso = getSignal(input, termIsoIDs);
+    const auto& iso = dnl_.getDNLIsoDB().getIsoFromIsoIDconst(
+        dnl_.getDNLTerminalFromID(input).getIsoID());
     const bool cachedAsInput = canUseCachedIsoShortcut(iso, input);
     assert(isInput(input) || cachedAsInput || iso.isConstant());
   }

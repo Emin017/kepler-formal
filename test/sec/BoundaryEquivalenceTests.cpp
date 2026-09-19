@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <stdexcept>
 #include <tuple>
 
 #include "BoolExprCache.h"
@@ -370,34 +371,29 @@ TEST_P(BoundaryEquivalenceTests, NestedBoundaryInputMutationIsDetected) {
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
 }
 
-TEST_P(BoundaryEquivalenceTests, SelectedHierarchyExcludesOpaqueAndStatefulDescendants) {
-  const auto result = prove(nestedWrapper("left", "inner_left", false, true),
-                            nestedWrapper("right", "inner_right", false, true),
-                            {{"wrapper", "wrapper"}});
-  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
-  EXPECT_EQ(result.coveredOutputs, 4u);
-  EXPECT_TRUE(result.opaqueCellSkippedOutputs.empty());
+TEST_P(BoundaryEquivalenceTests, RejectsBoundaryOnANonLeafInstance) {
+  auto* left = nestedWrapper("left", "inner_left", false, true);
+  auto* right = nestedWrapper("right", "inner_right", false, true);
+  EXPECT_THROW(prove(left, right, {{"wrapper", "wrapper"}}), std::invalid_argument);
 }
 
-TEST_P(BoundaryEquivalenceTests, InternalFeedthroughDoesNotAliasBoundaryPorts) {
+TEST_P(BoundaryEquivalenceTests, RejectsRawIsoAliasingAcrossABoundary) {
   auto* feedthrough = SNLDesign::create(designs_, NLName("feedthrough"));
   auto* input = port(feedthrough, "A", SNLTerm::Direction::Input);
   SNLScalarTerm::create(feedthrough, SNLTerm::Direction::Output, NLName("Y"))
       ->setNet(input);
-  const auto result = prove(wrapper("left", "macro", false, false, false, feedthrough),
-                            wrapper("right", "macro"), {{"macro", "macro"}});
-  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
-  EXPECT_EQ(result.coveredOutputs, 2u);
+  auto* left = wrapper("left", "macro", false, false, false, feedthrough);
+  auto* right = wrapper("right", "macro");
+  EXPECT_THROW(prove(left, right, {{"macro", "macro"}}), std::invalid_argument);
 }
 
-TEST_P(BoundaryEquivalenceTests, InternalConstantsDoNotConstrainSharedInputs) {
+TEST_P(BoundaryEquivalenceTests, RejectsConstantRawIsoOnABoundaryOutput) {
   auto* block = SNLDesign::create(designs_, NLName("constant_block"));
   port(block, "A", SNLTerm::Direction::Input);
   port(block, "Y", SNLTerm::Direction::Output)->setType(SNLNet::Type::Assign0);
-  const auto result = prove(wrapper("left", "macro", false, false, false, block),
-                            wrapper("right", "macro"), {{"macro", "macro"}});
-  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
-  EXPECT_EQ(result.coveredOutputs, 2u);
+  auto* left = wrapper("left", "macro", false, false, false, block);
+  auto* right = wrapper("right", "macro");
+  EXPECT_THROW(prove(left, right, {{"macro", "macro"}}), std::invalid_argument);
 }
 
 TEST_P(BoundaryEquivalenceTests, SelectedStateIsNotCollectedOrClockClassified) {

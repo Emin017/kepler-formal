@@ -44,7 +44,12 @@ class SecEncoding(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class VerificationOptions:
-    """Verification settings shared by the two designs."""
+    """Verification settings shared by the two designs.
+
+    ``set_as_boundary`` pairs top-relative paths to leaf instances, whose
+    models have no child instances. Hierarchical paths to leaves are valid;
+    selecting a nonleaf instance is rejected.
+    """
 
     mode: VerificationMode | str = VerificationMode.LEC
     solver: Solver | str = Solver.KISSAT

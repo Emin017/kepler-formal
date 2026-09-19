@@ -16,4 +16,4 @@ add_library(kepler_clauses STATIC
 
 # Make headers accessible to other targets
 target_include_directories(kepler_clauses PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(kepler_clauses PUBLIC formal_structures kepler_formal_utils naja_nl naja_dnl naja_core)
+target_link_libraries(kepler_clauses PUBLIC formal_structures naja_nl naja_dnl naja_core)

@@ -34,7 +34,7 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `--dump-btor2 <file>` | Write the prepared SEC equivalence obligation as BTOR2 before solving; SEC only. See [BTOR2 export](btor2-export.md). |
 | `--dump-only` | Stop after successful BTOR2 export; requires `--dump-btor2`. Exit code `0` indicates export success, without a proof verdict. |
 | `--allow-boundary-mismatch` | Allow LEC to continue when top-level inputs or sequential-element outputs do not match by name. Without this flag, a mismatch stops the run before SAT solving. LEC only. |
-| `--set-as-boundary <design1-path> <design2-path>` | Treat the paired hierarchical instances as a proof boundary. Repeat the flag for multiple instance pairs. The compatibility alias `--set_as_boundary` is also accepted. |
+| `--set-as-boundary <design1-path> <design2-path>` | Treat the paired leaf instances as a proof boundary. Repeat the flag for multiple instance pairs. The compatibility alias `--set_as_boundary` is also accepted. |
 | `-verilog` | Use Verilog Format. |
 | `-naja_if` | Use naja-if format. |
 | `-systemverilog`, `-sv` | Use SystemVerilog format for both designs. Requires SEC verification. |
@@ -140,6 +140,11 @@ kepler-formal -verilog design0.v design1.v \
   --set-as-boundary u_io/u_phy u_io/u_phy_gate
 ```
 
+Only leaf instances are supported: each selected instance's model must have no
+child instances. A hierarchical path such as `u_core/u_mem` is valid when its
+target is a leaf; selecting the nonleaf `u_core` itself is rejected. Leaf status
+is determined after loading/elaboration, not from the source module's name.
+
 For each selected instance, input pins act as additional compared outputs.
 This proves that both surrounding designs drive the abstracted block the same
 way. Output pins act as additional shared inputs, so the proof considers
@@ -151,14 +156,15 @@ verification boundaries: no netlist instances, ports, or connections are changed
 The two sides must expose matching pin names, bit ranges, and directions at
 each paired boundary. Instance input pins must be connected, and nonconstant
 input nets must have exactly one driver; unused output pins are allowed.
-Inout pins, aliased or multiply driven output nets, duplicate
-paths, and selections where one path is an ancestor of another are rejected.
+Inout pins, aliased, constant-connected or multiply driven output nets,
+duplicate paths, and selections where one path is an ancestor of another are
+rejected. This includes direct internal constant-wire ties; a constant truth
+table in a primitive model is supported.
 Kepler Formal validates these conditions before starting the proof. Boundary
 selection supports both LEC and SEC, including compact mode, and all input
 formats (`v`, `sv`, and `sv2v`; SV formats require SEC). Paths use elaborated
 instance names, which can differ from source names for generated SV scopes.
-Boundary selection cannot
-currently be combined with `use_scopes` or `clean_scopes`.
+Boundary selection cannot currently be combined with `use_scopes` or `clean_scopes`.
 
 The equivalent YAML form is:
 

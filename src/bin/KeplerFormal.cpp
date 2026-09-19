@@ -2631,7 +2631,7 @@ static int KeplerFormalMainImpl(
           NLUniverse::get()->setTopDesign(top);
           naja::DNL::destroy();
           builder.collect();
-          if (const auto* boundary = builder.getLogicalBoundary()) {
+          if (const auto* boundary = builder.getLeafBoundary()) {
             boundaryPorts = boundary->getPorts();
           }
           SPDLOG_INFO("Collected {} PIs for {}", builder.getInputs().size(), designLabel);

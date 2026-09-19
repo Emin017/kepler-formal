@@ -895,9 +895,9 @@ void MiterStrategy::init(bool enableLogging) {
     logger->info("Collecting POs for design 1: {}\n", top1_->getName().getString().c_str());
   }
   builder1_.collect();
-  if (builder0_.getLogicalBoundary() && builder1_.getLogicalBoundary()) {
-    validateBoundaryInterfaces(builder0_.getLogicalBoundary()->getPorts(),
-                               builder1_.getLogicalBoundary()->getPorts());
+  if (builder0_.getLeafBoundary() && builder1_.getLeafBoundary()) {
+    validateBoundaryInterfaces(builder0_.getLeafBoundary()->getPorts(),
+                               builder1_.getLeafBoundary()->getPorts());
   }
   if (!allowBoundaryMismatch_) {
     auto boundaryInputs1 = builder1_.getLecBoundaryInputs();

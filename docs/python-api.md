@@ -187,7 +187,10 @@ Enum fields accept either the exported enum member or its exact string value.
 Use `set_as_boundary` to remove paired block implementations from the proof
 and verify surrounding logic through their exposed interfaces. Each item pairs
 the instance path in `design1` with its corresponding path in `design2`. Paths
-are slash-separated and relative to the supplied top designs:
+are slash-separated and relative to the supplied top designs. The selected
+instances must be leaves: their models must have no child instances after
+loading/elaboration. Hierarchical paths to leaves are valid, but selecting a
+nonleaf instance is rejected:
 
 ```python
 options = VerificationOptions(
@@ -211,14 +214,15 @@ same unconstrained block response, without traversing the block's internals.
 Scalar and bus pin names, directions, widths, and ranges must match across each
 pair. `allow_boundary_mismatch` does not relax this selected-boundary interface
 check. Input pins must be connected, with exactly one driver on nonconstant
-input nets. Unused output pins are allowed; inout pins and aliased or multiply
-driven output nets are rejected.
+input nets. Unused output pins are allowed; inout pins and aliased,
+constant-connected or multiply driven output nets are rejected. Direct internal
+constant-wire ties are rejected, but primitive truth-table constants are supported.
 
 Boundary selection works for both LEC and SEC without cloning or rewiring
 the netlists. The caller's designs, connectivity, selected tops, and cached
 DNL remain unchanged and can be reused afterward. This option belongs to the
-live-design API. The Python
-extension does not expose file loading or command-line configuration parsing.
+live-design API. The Python extension does not expose file loading or
+command-line configuration parsing.
 
 ## Statuses and errors
 

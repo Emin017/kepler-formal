@@ -3,6 +3,7 @@
 
 #include <tbb/concurrent_vector.h>
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include "BoolExpr.h"
 #include "DesignBoundary.h"
@@ -63,10 +64,10 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
     boundaryPairs_ = pairs;
     boundarySide_ = side;
   }
-  const LogicalBoundary* getLogicalBoundary() const {
-    return borrowedBoundary_ ? borrowedBoundary_ : logicalBoundary_.get();
+  const LeafBoundary* getLeafBoundary() const {
+    return borrowedBoundary_ ? borrowedBoundary_ : leafBoundary_.get();
   }
-  void setLogicalBoundary(const LogicalBoundary* boundary) {
+  void setLeafBoundary(const LeafBoundary* boundary) {
     borrowedBoundary_ = boundary;
   }
 
@@ -131,11 +132,10 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   std::vector<naja::DNL::DNLID> collectOutputs();
   void setOutputs2OutputsIDs();
   void initVarNames();
-  const naja::DNL::DNLIso& getSignal(naja::DNL::DNLID termID) const;
   BoundaryPairs boundaryPairs_;
   size_t boundarySide_ = 0;
-  std::unique_ptr<LogicalBoundary> logicalBoundary_;
-  const LogicalBoundary* borrowedBoundary_ = nullptr;
+  std::unique_ptr<LeafBoundary> leafBoundary_;
+  const LeafBoundary* borrowedBoundary_ = nullptr;
   
   tbb::concurrent_vector<BoolExpr*> POs_;
   std::vector<naja::DNL::DNLID> inputs_;

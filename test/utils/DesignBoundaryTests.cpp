@@ -116,7 +116,7 @@ TEST_F(DesignBoundaryTests, SelectsBusBitsWithoutChangingAnyDesignObjects) {
   EXPECT_EQ(-1, port->lsb);
   const auto* dnl = naja::DNL::get();
   const auto dnlTerms = dnl->getNBterms();
-  LogicalBoundary boundary(*dnl, {{"u", "u"}}, 0);
+  LeafBoundary boundary(*dnl, {{"u", "u"}}, 0);
   EXPECT_EQ(2u, boundary.getInputs().size());
   EXPECT_EQ(2u, boundary.getOutputs().size());
   EXPECT_EQ(dnlTerms, dnl->getNBterms());
@@ -128,7 +128,7 @@ TEST_F(DesignBoundaryTests, SelectsBusBitsWithoutChangingAnyDesignObjects) {
   EXPECT_EQ(top, universe_->getTopDesign());
 }
 
-TEST_F(DesignBoundaryTests, LogicalCutDoesNotFollowInternalWireAliasOrConstant) {
+TEST_F(DesignBoundaryTests, RejectsLeafOutputInternalWireAliasOrConstant) {
   for (bool constant : {false, true}) {
     SCOPED_TRACE(constant);
     auto* block = SNLDesign::create(designs_);
@@ -147,22 +147,9 @@ TEST_F(DesignBoundaryTests, LogicalCutDoesNotFollowInternalWireAliasOrConstant) 
     universe_->setTopDesign(top);
     const auto* dnl = naja::DNL::get();
     const auto& occurrence = dnl->getTop().getChildInstance(instance);
-    const auto inputID = occurrence.getTerminalFromBitTerm(a).getID();
     const auto outputID = occurrence.getTerminalFromBitTerm(y).getID();
-    const auto topInputID = dnl->getTop().getTerminalFromBitTerm(
-        top->getScalarTerm(NLName("a"))).getID();
-    const auto topOutputID = dnl->getTop().getTerminalFromBitTerm(
-        top->getScalarTerm(NLName("y"))).getID();
     const auto originalIso = dnl->getDNLTerminalFromID(outputID).getIsoID();
-    LogicalBoundary boundary(*dnl, {{"u", "u"}}, 0);
-    EXPECT_TRUE(boundary.isInput(outputID));
-    EXPECT_TRUE(boundary.isOutput(inputID));
-    EXPECT_NE(boundary.getSignal(inputID).getIsoID(),
-              boundary.getSignal(outputID).getIsoID());
-    ASSERT_EQ(1u, boundary.getSignal(topOutputID).getDrivers().size());
-    EXPECT_EQ(outputID, boundary.getSignal(topOutputID).getDrivers().front());
-    EXPECT_EQ(topInputID, boundary.getSignal(inputID).getDrivers().front());
-    EXPECT_FALSE(boundary.getSignal(outputID).isConstant());
+    EXPECT_THROW(LeafBoundary(*dnl, {{"u", "u"}}, 0), std::invalid_argument);
     EXPECT_EQ(originalIso, dnl->getDNLTerminalFromID(outputID).getIsoID());
     EXPECT_EQ(inner, y->getNet());
     EXPECT_EQ(input, instance->getInstTerm(a)->getNet());
@@ -191,7 +178,7 @@ TEST_F(DesignBoundaryTests, NestedOccurrenceDoesNotAffectSiblingUsingSameModel) 
   const auto* dnl = naja::DNL::get();
   const auto& first = dnl->getTop().getChildInstance(top->getInstance(NLName("first")));
   const auto& second = dnl->getTop().getChildInstance(top->getInstance(NLName("second")));
-  LogicalBoundary boundary(*dnl, {{"first/leaf", "first/leaf"}}, 0);
+  LeafBoundary boundary(*dnl, {{"first/leaf", "first/leaf"}}, 0);
   EXPECT_FALSE(boundary.containsInstance(first.getID()));
   EXPECT_TRUE(boundary.containsInstance(first.getChildInstance(leaf).getID()));
   EXPECT_FALSE(boundary.containsInstance(second.getChildInstance(leaf).getID()));
@@ -200,7 +187,7 @@ TEST_F(DesignBoundaryTests, NestedOccurrenceDoesNotAffectSiblingUsingSameModel) 
   EXPECT_EQ(leaf, wrapper->getInstance(NLName("leaf")));
 }
 
-TEST_F(DesignBoundaryTests, HierarchicalBoundaryExcludesAllDescendants) {
+TEST_F(DesignBoundaryTests, RejectsNonLeafBoundaryWithoutChangingHierarchy) {
   auto* block = createScalarBlock("BLOCK", {"A"}, {"Y"});
   auto* wrapper = SNLDesign::create(designs_, NLName("wrapper"));
   auto* a = addPort(wrapper, "A", SNLTerm::Direction::Input);
@@ -215,13 +202,16 @@ TEST_F(DesignBoundaryTests, HierarchicalBoundaryExcludesAllDescendants) {
   instance->getInstTerm(wrapper->getScalarTerm(NLName("Y")))->setNet(
       addPort(top, "y", SNLTerm::Direction::Output));
   universe_->setTopDesign(top);
-  const auto* dnl = naja::DNL::get();
-  const auto& selected = dnl->getTop().getChildInstance(instance);
-  LogicalBoundary boundary(*dnl, {{"u", "u"}}, 0);
-  EXPECT_TRUE(boundary.containsInstance(selected.getID()));
-  EXPECT_TRUE(boundary.containsInstance(selected.getChildInstance(leaf).getID()));
-  EXPECT_EQ(1u, boundary.getInputs().size());
-  EXPECT_EQ(1u, boundary.getOutputs().size());
+  try {
+    BoundarySelection(top, {{"u", "u"}}, 0);
+    FAIL() << "non-leaf selection must be rejected";
+  } catch (const std::invalid_argument& error) {
+    EXPECT_NE(std::string::npos, std::string(error.what()).find("not a leaf"));
+  }
+  EXPECT_EQ(wrapper, instance->getModel());
+  EXPECT_EQ(leaf, wrapper->getInstance(NLName("leaf")));
+  EXPECT_THROW(LeafBoundary(*naja::DNL::get(), {{"u", "u"}}, 0),
+               std::invalid_argument);
 }
 
 TEST_F(DesignBoundaryTests, ConstantInputAndUnusedOutputNeedNoNewNetsOrInstances) {
@@ -232,13 +222,14 @@ TEST_F(DesignBoundaryTests, ConstantInputAndUnusedOutputNeedNoNewNetsOrInstances
   auto* instance = SNLInstance::create(top, block, NLName("u"));
   instance->getInstTerm(block->getScalarTerm(NLName("A")))->setNet(constant);
   universe_->setTopDesign(top);
-  LogicalBoundary boundary(*naja::DNL::get(), {{"u", "u"}}, 0);
+  const auto* dnl = naja::DNL::get();
+  LeafBoundary boundary(*dnl, {{"u", "u"}}, 0);
   ASSERT_EQ(1u, boundary.getOutputs().size());
-  EXPECT_TRUE(boundary.getSignal(boundary.getOutputs().front()).isConstant0());
+  const auto isoID = dnl->getDNLTerminalFromID(boundary.getOutputs().front()).getIsoID();
+  EXPECT_TRUE(dnl->getDNLIsoDB().getIsoFromIsoIDconst(isoID).isConstant0());
   ASSERT_EQ(1u, boundary.getInputs().size());
-  const auto& signal = boundary.getSignal(boundary.getInputs().front());
-  ASSERT_EQ(1u, signal.getDrivers().size());
-  EXPECT_EQ(boundary.getInputs().front(), signal.getDrivers().front());
+  EXPECT_TRUE(boundary.isInput(boundary.getInputs().front()));
+  EXPECT_TRUE(boundary.getPort(boundary.getOutputs().front())->isInput);
   EXPECT_EQ(nullptr, instance->getInstTerm(block->getScalarTerm(NLName("Y")))->getNet());
   EXPECT_EQ(1u, top->getInstances().size());
   EXPECT_EQ(1u, top->getNets().size());

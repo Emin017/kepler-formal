@@ -80,10 +80,12 @@ encoding, and bound options require SEC; boundary-mismatch handling requires
 LEC.
 
 ``set_as_boundary`` accepts ordered pairs of slash-separated instance paths,
-one path relative to each supplied top design. For every selected instance,
+one path relative to each supplied top design. Only leaf instances, whose models
+have no child instances, may be selected. Hierarchical paths to leaves are
+supported; nonleaf selections are rejected. For every selected instance,
 its inputs become additional compared outputs and its outputs become shared
 unconstrained inputs. Corresponding pin interfaces must match. These logical
-verification frontiers work for both LEC and SEC without cloning or rewiring
+verification boundaries work for both LEC and SEC without cloning or rewiring
 the designs; the original designs and any caller-owned DNL remain reusable
 after the call.
 

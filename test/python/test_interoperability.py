@@ -240,6 +240,28 @@ class LiveNajaedaInteroperabilityTest(unittest.TestCase):
         self.assertEqual("naja_design", result.input_format)
         self.assertEqual(1, result.total_outputs)
 
+    def test_nonleaf_boundary_is_rejected_without_changing_hierarchy(self):
+        outer = najaeda.naja.SNLDesign.create(self.library, "outer")
+        wrapper = najaeda.naja.SNLInstance.create(outer, self.reference, "wrapper")
+        top_before = self.universe.getTopDesign()
+        revision = outer.getRevisionCount()
+        for mode in (VerificationMode.LEC, VerificationMode.SEC):
+            with self.subTest(mode=mode):
+                result = verify_designs(
+                    outer,
+                    outer,
+                    options=VerificationOptions(
+                        mode=mode,
+                        set_as_boundary=[("wrapper", "wrapper")],
+                        log_file=self.root / f"nonleaf-{mode.value}.log",
+                    ),
+                )
+                self.assertEqual(VerificationStatus.ERROR, result.status)
+                self.assertIn("not a leaf", result.reason)
+        self.assertEqual(wrapper, outer.getInstance("wrapper"))
+        self.assertEqual(revision, outer.getRevisionCount())
+        self.assertIs(top_before, self.universe.getTopDesign())
+
     def test_selected_instances_are_compared_as_shared_boundaries(self):
         opaque = najaeda.naja.SNLDesign.createPrimitive(
             self.primitives, "opaque_boundary_model"
