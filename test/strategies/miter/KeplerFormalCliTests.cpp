@@ -263,6 +263,10 @@ struct SimpleCliFixture {
   std::filesystem::path design1Path;
 };
 
+struct OpaqueBoundaryCliFixture : SimpleCliFixture {
+  std::filesystem::path libertyPath;
+};
+
 struct SystemVerilogFlistFixture {
   std::filesystem::path tmpDir;
   std::filesystem::path design0ChildPath;
@@ -514,6 +518,76 @@ SimpleCliFixture createDesignFixture(const std::string& extension,
 SimpleCliFixture createEquivalentDesignFixture(const std::string& extension,
                                                const std::string& moduleBody) {
   return createDesignFixture(extension, moduleBody, moduleBody);
+}
+
+OpaqueBoundaryCliFixture createOpaqueBoundaryFixture(
+    const std::string& design0Body,
+    const std::string& design1Body) {
+  OpaqueBoundaryCliFixture fixture;
+  fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_boundary_opaque");
+  fixture.design0Path = fixture.tmpDir / "design0.v";
+  fixture.design1Path = fixture.tmpDir / "design1.v";
+  fixture.libertyPath = fixture.tmpDir / "opaque.lib";
+
+  {
+    std::ofstream design0(fixture.design0Path);
+    design0 << design0Body;
+  }
+  {
+    std::ofstream design1(fixture.design1Path);
+    design1 << design1Body;
+  }
+  {
+    std::ofstream liberty(fixture.libertyPath);
+    liberty <<
+        "library (boundary_opaque) {\n"
+        "  cell (OPAQUE) {\n"
+        "    pin (A) { direction : input; }\n"
+        "    pin (Y) { direction : output; }\n"
+        "  }\n"
+        "}\n";
+  }
+  return fixture;
+}
+
+StructuredRun runBoundaryInputComparison(const std::string& leftConnection,
+                                          const std::string& rightConnection,
+                                          bool compact) {
+  const auto makeDesign = [](const std::string& connection) {
+    return std::string(
+               "module child(input i, output o);\n"
+               "  assign o = 1'b0;\n"
+               "endmodule\n"
+               "module top(input a, output y);\n"
+               "  child u_boundary(.i(") +
+           connection +
+           "), .o(y));\n"
+           "endmodule\n";
+  };
+  const auto fixture = createDesignFixture(
+      "v", makeDesign(leftConnection), makeDesign(rightConnection));
+  const auto runDir = fixture.tmpDir / "boundary_constant_run";
+  std::filesystem::create_directories(runDir);
+
+  StructuredRun run;
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    std::vector<std::string> args = {
+        "kepler-formal",
+        "-verilog",
+        fixture.design0Path.string(),
+        fixture.design1Path.string(),
+        "--set-as-boundary",
+        "u_boundary",
+        "u_boundary"};
+    if (compact) {
+      args.emplace_back("--compact");
+    }
+    run = runStructuredWithArgs(std::move(args));
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+  return run;
 }
 
 std::filesystem::path copyExampleLibertyFile(const std::filesystem::path& directory,
@@ -1324,6 +1398,325 @@ TEST_F(KeplerFormalCliTests, CliCompactFlagAlignsReorderedInputsAndOutputs) {
   }
 
   std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliSetAsBoundaryExposesDifferentInstanceInputs) {
+  const auto fixture = createDesignFixture(
+      "v",
+      "module child(input i, output o);\n"
+      "  assign o = 1'b0;\n"
+      "endmodule\n"
+      "module top(input a, input b, output y);\n"
+      "  child u_boundary(.i(a), .o(y));\n"
+      "endmodule\n",
+      "module child(input i, output o);\n"
+      "  assign o = 1'b0;\n"
+      "endmodule\n"
+      "module top(input a, input b, output y);\n"
+      "  child u_boundary(.i(b), .o(y));\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "boundary_input_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    const auto run = runStructuredWithArgs(
+        {"kepler-formal",
+         "--set_as_boundary",
+         "u_boundary",
+         "u_boundary",
+         "-verilog",
+         fixture.design0Path.string(),
+         fixture.design1Path.string()});
+    EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+  }
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliSetAsBoundaryDetectsSignalVersusConstantZero) {
+  const auto run = runBoundaryInputComparison("a", "1'b0", false);
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliCompactSetAsBoundaryDetectsSignalVersusConstantZero) {
+  const auto run = runBoundaryInputComparison("a", "1'b0", true);
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliSetAsBoundaryDetectsConstantZeroVersusOne) {
+  const auto run = runBoundaryInputComparison("1'b0", "1'b1", false);
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliCompactSetAsBoundaryDetectsConstantZeroVersusOne) {
+  const auto run = runBoundaryInputComparison("1'b0", "1'b1", true);
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSetAsBoundaryAbstractsInstanceOutput) {
+  const auto fixture = createDesignFixture(
+      "v",
+      "module child(input i, output o);\n"
+      "  assign o = 1'b0;\n"
+      "endmodule\n"
+      "module top(input a, output y);\n"
+      "  child u_boundary(.i(a), .o(y));\n"
+      "endmodule\n",
+      "module child(input i, output o);\n"
+      "  assign o = 1'b1;\n"
+      "endmodule\n"
+      "module top(input a, output y);\n"
+      "  child u_boundary(.i(a), .o(y));\n"
+      "endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "set_as_boundary:\n"
+      "  - [u_boundary, u_boundary]\n");
+
+  const auto baseline = runStructuredWithArgs(
+      {"kepler-formal",
+       "-verilog",
+       fixture.design0Path.string(),
+       fixture.design1Path.string()});
+  EXPECT_EQ(baseline.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(baseline.result.status, KEPLER_FORMAL::RunStatus::Different);
+
+  const auto bounded = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(bounded.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(bounded.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliSetAsBoundaryAcceptsNestedSelfBoundary) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module leaf(input i, output o);\n"
+      "  assign o = i;\n"
+      "endmodule\n"
+      "module wrapper(input i, output o);\n"
+      "  leaf u_leaf(.i(i), .o(o));\n"
+      "endmodule\n"
+      "module top(input a, output y);\n"
+      "  wrapper u_wrap(.i(a), .o(y));\n"
+      "endmodule\n");
+
+  const auto run = runStructuredWithArgs(
+      {"kepler-formal",
+       "-verilog",
+       fixture.design0Path.string(),
+       fixture.design1Path.string(),
+       "--set-as-boundary",
+       "u_wrap/u_leaf",
+       "u_wrap/u_leaf"});
+  EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliCompactSetAsBoundaryUsesEachSidePath) {
+  const auto fixture = createEquivalentDesignFixture(
+      "v",
+      "module child(input i, output o);\n"
+      "  assign o = 1'b0;\n"
+      "endmodule\n"
+      "module top(input a, input b, output y);\n"
+      "  wire unused0;\n"
+      "  wire unused1;\n"
+      "  child u_left(.i(a), .o(unused0));\n"
+      "  child u_right(.i(b), .o(unused1));\n"
+      "  assign y = 1'b0;\n"
+      "endmodule\n");
+  const auto runDir = fixture.tmpDir / "compact_boundary_run";
+  std::filesystem::create_directories(runDir);
+
+  {
+    CurrentPathGuard currentPathGuard;
+    std::filesystem::current_path(runDir);
+    const auto run = runStructuredWithArgs(
+        {"kepler-formal",
+         "-verilog",
+         fixture.design0Path.string(),
+         fixture.design1Path.string(),
+         "--compact",
+         "--set-as-boundary",
+         "u_left",
+         "u_right"});
+    EXPECT_EQ(run.exitCode, EXIT_SUCCESS);
+    EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+  }
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliSecSetAsBoundaryProvesRenamedOpaquePair) {
+  const auto fixture = createOpaqueBoundaryFixture(
+      "module top(input a, output y);\n"
+      "  OPAQUE u_reference(.A(a), .Y(y));\n"
+      "endmodule\n",
+      "module top(input a, output y);\n"
+      "  OPAQUE u_implementation(.A(a), .Y(y));\n"
+      "endmodule\n");
+
+  const auto run = runStructuredWithArgs(
+      {"kepler-formal",
+       "-v",
+       "sec",
+       "--sec-engine",
+       "k_induction",
+       "--sec-encoding",
+       "binary",
+       "-k",
+       "1",
+       "-verilog",
+       "--design1",
+       fixture.design0Path.string(),
+       "--design2",
+       fixture.design1Path.string(),
+       "--set-as-boundary",
+       "u_reference",
+       "u_implementation",
+       "--liberty",
+       fixture.libertyPath.string()});
+  EXPECT_EQ(run.exitCode, kSecProvedExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliCompactSecSetAsBoundaryProvesRenamedOpaquePair) {
+  const auto fixture = createOpaqueBoundaryFixture(
+      "module top(input a, output y);\n"
+      "  OPAQUE u_reference(.A(a), .Y(y));\n"
+      "endmodule\n",
+      "module top(input a, output y);\n"
+      "  OPAQUE u_implementation(.A(a), .Y(y));\n"
+      "endmodule\n");
+
+  const auto run = runStructuredWithArgs(
+      {"kepler-formal",
+       "-v",
+       "sec",
+       "--sec-engine",
+       "k_induction",
+       "--sec-encoding",
+       "binary",
+       "-k",
+       "1",
+       "-verilog",
+       "--design1",
+       fixture.design0Path.string(),
+       "--design2",
+       fixture.design1Path.string(),
+       "--compact",
+       "--set-as-boundary",
+       "u_reference",
+       "u_implementation",
+       "--liberty",
+       fixture.libertyPath.string()});
+  EXPECT_EQ(run.exitCode, kSecProvedExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Equivalent);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests,
+       CliCompactSecDifferentBoundaryPathsDisableSelfModelReuse) {
+  const std::string design =
+      "module top(input a, input b, output y);\n"
+      "  wire left_y;\n"
+      "  wire right_y;\n"
+      "  OPAQUE u_left(.A(a), .Y(left_y));\n"
+      "  OPAQUE u_right(.A(b), .Y(right_y));\n"
+      "  assign y = 1'b0;\n"
+      "endmodule\n";
+  const auto fixture = createOpaqueBoundaryFixture(design, design);
+
+  const auto run = runStructuredWithArgs(
+      {"kepler-formal",
+       "-v",
+       "sec",
+       "--sec-engine",
+       "k_induction",
+       "--sec-encoding",
+       "binary",
+       "-k",
+       "1",
+       "-verilog",
+       "--design1",
+       fixture.design0Path.string(),
+       "--design2",
+       fixture.design0Path.string(),
+       "--compact",
+       "--set-as-boundary",
+       "u_left",
+       "u_right",
+       "--liberty",
+       fixture.libertyPath.string()});
+  EXPECT_EQ(run.exitCode, kSecCounterexampleExitCode);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSetAsBoundaryRejectsInterfaceMismatch) {
+  const auto fixture = createDesignFixture(
+      "v",
+      "module child(input i, output o); assign o = i; endmodule\n"
+      "module top(input a, output y); child u(.i(a), .o(y)); endmodule\n",
+      "module child(input j, output o); assign o = j; endmodule\n"
+      "module top(input a, output y); child u(.j(a), .o(y)); endmodule\n");
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "input_paths:\n"
+      "  - " + fixture.design0Path.string() + "\n"
+      "  - " + fixture.design1Path.string() + "\n"
+      "set_as_boundary:\n"
+      "  - [u, u]\n");
+
+  const auto run = runStructuredWithConfigFile(cfgPath);
+  EXPECT_EQ(run.exitCode, EXIT_FAILURE);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Error);
+
+  std::filesystem::remove(cfgPath);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, ConfigSetAsBoundaryRequiresPathPairs) {
+  const auto cfgPath = writeTempConfig(
+      "format: verilog\n"
+      "set_as_boundary: [u0, u1]\n");
+  EXPECT_EQ(runWithConfigFile(cfgPath), EXIT_FAILURE);
+  std::filesystem::remove(cfgPath);
+}
+
+TEST_F(KeplerFormalCliTests, CliSetAsBoundaryRequiresTwoPaths) {
+  EXPECT_EQ(
+      runWithArgs(
+          {"kepler-formal",
+           "-verilog",
+           "design0.v",
+           "design1.v",
+           "--set-as-boundary",
+           "u0"}),
+      EXIT_FAILURE);
 }
 
 TEST_F(KeplerFormalCliTests, CliReportSkippedPOsFlagAccepted) {
