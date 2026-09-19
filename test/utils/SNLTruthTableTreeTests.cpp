@@ -44,7 +44,7 @@ BoolExpr* buildGenericTruthTableExpr(
     const SNLTruthTable& tbl,
     uint32_t k,
     const SNLTruthTableTree::Node* node,
-    naja::DNL::DNLID isoID);
+    naja::DNL::DNLID isoID, const LogicalBoundary* boundary = nullptr);
 void clearChildFETS();
 void reserveChildFETS(size_t n);
 void setChildFETS(size_t i, BoolExpr* expr);
