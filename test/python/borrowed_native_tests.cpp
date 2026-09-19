@@ -204,8 +204,6 @@ void runTests() {
       makeOpaqueBoundary(library1, primitives1, "opaque_second", "alternate");
   auto opaqueConstant =
       makeOpaqueBoundary(library1, primitives1, "opaque_constant", "constant");
-  auto* assignInput = NLDB0::getAssignInput();
-  auto* assignOutput = NLDB0::getAssignOutput();
   universe->setTopDesign(anchor);
   db1->setTopDesign(nullptr);
   auto* savedDnl = naja::DNL::get();
@@ -231,8 +229,6 @@ void runTests() {
   const auto opaqueFirstRevision = opaqueFirst.design->getRevisionCount();
   const auto opaqueSecondRevision = opaqueSecond.design->getRevisionCount();
   const auto opaqueConstantRevision = opaqueConstant.design->getRevisionCount();
-  const auto assignInputOrderID = assignInput->getOrderID();
-  const auto assignOutputOrderID = assignOutput->getOrderID();
   const auto db0LibraryCount = db0->getLibraries().size();
   const auto db1LibraryCount = db1->getLibraries().size();
 
@@ -244,14 +240,11 @@ void runTests() {
           "a per-DB top selection changed");
     check(db0->getLibraries().size() == db0LibraryCount &&
               db1->getLibraries().size() == db1LibraryCount,
-          "temporary boundary library escaped its call");
+          "boundary verification changed library ownership");
     check(naja::DNL::isCreated() && naja::DNL::get() == savedDnl,
           "caller DNL was replaced or destroyed");
     check(firstInput->getOrderID() == 100 && child->getOrderID() == 101 &&
               modelInput->getOrderID() == 102, "caller ordering metadata changed");
-    check(assignInput->getOrderID() == assignInputOrderID &&
-              assignOutput->getOrderID() == assignOutputOrderID,
-          "boundary-only primitive ordering metadata changed");
     check(first->getRevisionCount() == firstRevision &&
               second->getRevisionCount() == secondRevision, "design was modified");
     check(opaqueFirst.design->getRevisionCount() == opaqueFirstRevision &&

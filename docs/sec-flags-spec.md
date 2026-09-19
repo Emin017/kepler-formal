@@ -114,7 +114,7 @@ liberty_files:
 | `--dump-btor2 <file>` | `btor2_export: true`, `btor2_export_path: <file>` | disabled; YAML path `miter.btor2` when enabled | Non-empty file path | Writes the prepared bit-level equivalence obligation before solving. Includes both designs, startup/reset semantics, and the mismatch property for covered outputs. |
 | `--dump-only` | `dump_only: true` | `false` | boolean | Stops after BTOR2 export. Requires export to be enabled. Success is an export result, not a proof verdict. |
 | `--compact` | `compact_mode: true` | `false` | boolean | Enables compact SEC extraction: design 1 is extracted and released before design 2 is loaded; identical SEC inputs can reuse the extracted design 1 model. |
-| `--set-as-boundary <design1-path> <design2-path>` | `set_as_boundary: [[design1_path, design2_path], ...]` | omitted | Repeatable paired top-relative instance paths | Abstracts each paired instance before SEC extraction. The underscore spelling `--set_as_boundary` is accepted as a compatibility alias. |
+| `--set-as-boundary <design1-path> <design2-path>` | `set_as_boundary: [[design1_path, design2_path], ...]` | omitted | Repeatable paired top-relative instance paths | Treats each paired instance as a logical frontier during SEC extraction. The underscore spelling `--set_as_boundary` is accepted as a compatibility alias. |
 | `--report-skipped-pos` | `report_skipped_pos: true` | `false` | boolean | Enables skipped-output reporting and writes SEC boundary reporting when entries exist. |
 
 Accepted values for `sec_engine`:
@@ -169,13 +169,14 @@ and unsupported when no aligned verifiable output remains.
 
 User-defined boundaries provide an explicit alternative when the behavior of a
 paired internal block is intentionally outside the SEC obligation. For a
-selected instance, its input pins are promoted to observed top outputs and its
-output pins are promoted to shared environment inputs. SEC therefore proves
+selected instance, its input pins are additional observed outputs and its
+output pins are shared environment inputs. SEC therefore proves
 that the surrounding designs drive the block identically and remain equivalent
 for every possible value returned by the abstracted block. Interface names,
 directions, widths, and bit ranges are validated across the paired paths before
-proof. Boundary transformation happens before transition-system extraction, so
-the behavior is the same in normal and compact SEC. Compact self-model reuse is
+proof. Transition-system extraction stops at these logical frontiers without
+cloning or rewiring the netlists. The behavior is the same in normal and compact
+SEC, for `v`, `sv`, and `sv2v` inputs. Compact self-model reuse is
 disabled when any paired left/right instance paths differ.
 
 Example:

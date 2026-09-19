@@ -31,7 +31,6 @@ set(KEPLER_FORMAL_DRIVER_LIBRARIES
     kepler_verification_support
     kepler_version
     kepler_config
-    kepler_formal_utils
     kepler_sec
     naja_dnl
     naja_nl_dump

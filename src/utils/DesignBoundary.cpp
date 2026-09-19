@@ -4,7 +4,6 @@
 #include "DesignBoundary.h"
 
 #include <algorithm>
-#include <atomic>
 #include <iomanip>
 #include <map>
 #include <set>
@@ -14,11 +13,7 @@
 #include <tuple>
 #include <utility>
 
-#include "NLDB.h"
-#include "NLDB0.h"
-#include "NLLibrary.h"
 #include "NLName.h"
-#include "NLUniverse.h"
 #include "SNLBitNet.h"
 #include "SNLBitTerm.h"
 #include "SNLBundleTerm.h"
@@ -28,18 +23,12 @@
 #include "SNLInstance.h"
 #include "SNLInstTerm.h"
 #include "SNLNetComponent.h"
-#include "SNLScalarNet.h"
-#include "SNLScalarTerm.h"
 
 namespace KEPLER_FORMAL {
 namespace {
 
-using naja::NL::NLDB;
-using naja::NL::NLDB0;
 using naja::NL::NLID;
-using naja::NL::NLLibrary;
 using naja::NL::NLName;
-using naja::NL::NLUniverse;
 using naja::NL::SNLBitNet;
 using naja::NL::SNLBitTerm;
 using naja::NL::SNLBusTermBit;
@@ -47,13 +36,11 @@ using naja::NL::SNLDesign;
 using naja::NL::SNLInstance;
 using naja::NL::SNLInstTerm;
 using naja::NL::SNLNetComponent;
-using naja::NL::SNLScalarNet;
-using naja::NL::SNLScalarTerm;
 using naja::NL::SNLTerm;
 
 struct PinSpec {
   BoundaryPort port;
-  size_t flatID = 0;
+  SNLBitTerm* term = nullptr;
 };
 
 struct BoundarySpec {
@@ -193,8 +180,7 @@ void validateOutputConnectivity(const std::string& path,
                                 const SNLInstTerm* output) {
   SNLBitNet* net = output->getNet();
   if (net == nullptr) {
-    // An unused block output is still part of the paired interface.  The
-    // transformed design gives it a fresh net driven by the promoted top PI.
+    // An unused output still supplies a paired environment variable.
     return;
   }
   if (net->isConstant()) {
@@ -320,32 +306,19 @@ std::vector<BoundarySpec> preflight(SNLDesign* top,
 
       PinSpec pin;
       pin.port = describePort(spec.pairIndex, bitTerm);
-      pin.flatID = bitTerm->getFlatID();
+      pin.term = bitTerm;
       if (!generatedTopNames.insert(pin.port.topTermName).second) {
         throw std::invalid_argument(
             "boundary pins generate duplicate top term " +
             quote(pin.port.topTermName));
       }
-
-      // The synthetic term is threaded through every containing model.  Check
-      // every source interface before cloning so a collision cannot leave a
-      // partially transformed scratch hierarchy.
-      SNLDesign* containing = top;
-      if (containing->getTerm(NLName(pin.port.topTermName)) != nullptr) {
+      // SEC reports and aligns observed outputs by their display names.
+      if (top->getTerm(NLName(pin.port.topTermName)) != nullptr) {
         throw std::invalid_argument(
             "boundary top term collides with existing term " +
             quote(pin.port.topTermName));
       }
-      for (size_t depth = 0; depth + 1 < spec.components.size(); ++depth) {
-        SNLInstance* ancestor =
-            containing->getInstance(NLName(spec.components[depth]));
-        containing = ancestor->getModel();
-        if (containing->getTerm(NLName(pin.port.topTermName)) != nullptr) {
-          throw std::invalid_argument(
-              "boundary term " + quote(pin.port.topTermName) +
-              " collides in ancestor model on path " + quote(spec.path));
-        }
-      }
+
       spec.pins.push_back(std::move(pin));
     }
 
@@ -362,24 +335,7 @@ std::vector<BoundarySpec> preflight(SNLDesign* top,
   return specs;
 }
 
-SNLTerm::Direction promotedDirection(const BoundaryPort& port) {
-  return port.isInput ? SNLTerm::Direction::Output
-                      : SNLTerm::Direction::Input;
-}
-
 using PortKey = std::tuple<size_t, std::string, int32_t>;
-
-NLLibrary* createScratchLibrary(NLDB* db) {
-  static std::atomic<size_t> nextID{0};
-  for (;;) {
-    const std::string name =
-        "__kepler_boundary_scratch_" + std::to_string(nextID.fetch_add(1));
-    if (db->getLibrary(NLName(name)) == nullptr) {
-      return NLLibrary::create(
-          db, NLLibrary::Type::Standard, NLName(name));
-    }
-  }
-}
 
 std::map<PortKey, const BoundaryPort*> indexPorts(
     const std::vector<BoundaryPort>& ports,
@@ -404,196 +360,110 @@ std::string describePortKey(const PortKey& key) {
 
 }  // namespace
 
-struct BoundaryDesign::Impl {
-  Impl(SNLDesign* source, const BoundaryPairs& pairs, size_t side)
-      : sourceDB_(source == nullptr ? nullptr : source->getDB()),
-        previousDBTop_(sourceDB_ == nullptr ? nullptr : sourceDB_->getTopDesign()),
-        previousUniverseTopDB_(NLUniverse::get() == nullptr
-                                   ? nullptr
-                                   : NLUniverse::get()->getTopDB()) {
-    const auto specs = preflight(source, pairs, side);
-    try {
-      scratchLibrary_ = createScratchLibrary(sourceDB_);
-      top_ = source->cloneToLibrary(scratchLibrary_, NLName());
-      transform(specs);
-      keepTopNonLeaf();
-    } catch (...) {
-      if (scratchLibrary_ != nullptr) {
-        scratchLibrary_->destroy();
-        scratchLibrary_ = nullptr;
-        top_ = nullptr;
-      }
-      throw;
+BoundarySelection::BoundarySelection(SNLDesign* top,
+                                     const BoundaryPairs& pairs, size_t side) {
+  for (const auto& spec : preflight(top, pairs, side)) {
+    for (const auto& pin : spec.pins) {
+      ports_.push_back(pin.port);
     }
   }
-
-  ~Impl() {
-    if (scratchLibrary_ == nullptr) {
-      return;
-    }
-
-    NLUniverse* universe = NLUniverse::get();
-    const bool scratchWasActive =
-        sourceDB_ != nullptr && sourceDB_->getTopDesign() != nullptr &&
-        sourceDB_->getTopDesign()->getLibrary() == scratchLibrary_;
-    if (scratchWasActive) {
-      sourceDB_->setTopDesign(previousDBTop_);
-      if (universe != nullptr && universe->getTopDB() == sourceDB_ &&
-          previousUniverseTopDB_ != sourceDB_) {
-        universe->setTopDB(previousUniverseTopDB_);
-      }
-    }
-    scratchLibrary_->destroy();
-  }
-
-  void transform(const std::vector<BoundarySpec>& specs) {
-    for (const auto& spec : specs) {
-      SNLDesign* containing = top_;
-      std::vector<SNLInstance*> ancestors;
-      ancestors.reserve(spec.components.size() - 1);
-
-      for (size_t depth = 0; depth + 1 < spec.components.size(); ++depth) {
-        SNLInstance* ancestor =
-            containing->getInstance(NLName(spec.components[depth]));
-        if (ancestor->getModel()->getLibrary() != scratchLibrary_) {
-          SNLDesign* uniqueModel =
-              ancestor->getModel()->cloneToLibrary(scratchLibrary_, NLName());
-          ancestor->setModel(uniqueModel);
-        }
-        ancestors.push_back(ancestor);
-        containing = ancestor->getModel();
-      }
-
-      SNLInstance* target = containing->getInstance(
-          NLName(spec.components.back()));
-      struct CutPin {
-        const PinSpec* spec = nullptr;
-        SNLBitNet* net = nullptr;
-      };
-      std::vector<CutPin> cutPins;
-      cutPins.reserve(spec.pins.size());
-      for (const auto& pin : spec.pins) {
-        SNLInstTerm* instTerm = target->getInstTermByFlatID(pin.flatID);
-        cutPins.push_back(CutPin{&pin, instTerm->getNet()});
-      }
-
-      target->destroy();
-
-      for (const auto& cutPin : cutPins) {
-        const BoundaryPort& port = cutPin.spec->port;
-        const auto direction = promotedDirection(port);
-        SNLBitNet* cutNet = cutPin.net;
-        if (cutNet == nullptr) {
-          cutNet = SNLScalarNet::create(containing);
-        }
-        SNLBitTerm* promoted = SNLScalarTerm::create(
-            containing, direction, NLName(port.topTermName));
-        promoted->setNet(cutNet);
-
-        for (auto ancestor = ancestors.rbegin(); ancestor != ancestors.rend();
-             ++ancestor) {
-          SNLInstTerm* promotedInstTerm = (*ancestor)->getInstTerm(promoted);
-          SNLDesign* parent = (*ancestor)->getDesign();
-          SNLBitNet* parentNet = SNLScalarNet::create(parent);
-          promotedInstTerm->setNet(parentNet);
-          promoted = SNLScalarTerm::create(
-              parent, direction, NLName(port.topTermName));
-          promoted->setNet(parentNet);
-        }
-        ports_.push_back(port);
-      }
-    }
-  }
-
-  // DNL treats a top design with no instances as a leaf.  In that shape a
-  // driverless constant top output is not assigned an iso, so a boundary
-  // checkpoint tied to 0/1 could disappear from comparison.  Keep a fully
-  // cut top non-leaf with one semantic identity primitive.  The bridge is
-  // placed on a real boundary port (rather than being a disconnected dummy),
-  // and preferentially on a constant checkpoint that needs the ordinary
-  // output net it creates.
-  void keepTopNonLeaf() {
-    if (ports_.empty() || top_->getInstances().size() != 0) {
-      return;
-    }
-
-    const BoundaryPort* anchorPort = nullptr;
-    for (const auto& port : ports_) {
-      if (!port.isInput) {
-        continue;
-      }
-      auto* term = top_->getScalarTerm(NLName(port.topTermName));
-      if (term != nullptr && term->getNet() != nullptr &&
-          term->getNet()->isConstant()) {
-        anchorPort = &port;
-        break;
-      }
-    }
-    if (anchorPort == nullptr) {
-      // Prefer a promoted top input when no constant checkpoint needs the
-      // bridge; this leaves aliases between observed input checkpoints intact.
-      const auto outputPin = std::find_if(
-          ports_.begin(), ports_.end(),
-          [](const BoundaryPort& port) { return !port.isInput; });
-      anchorPort = outputPin == ports_.end() ? &ports_.front() : &*outputPin;
-    }
-
-    auto* boundaryTerm =
-        top_->getScalarTerm(NLName(anchorPort->topTermName));
-    if (boundaryTerm == nullptr || boundaryTerm->getNet() == nullptr) {
-      throw std::logic_error(
-          "internal error: boundary anchor term is missing its net");
-    }
-    auto* assignModel = NLDB0::getAssign();
-    auto* assignInput = NLDB0::getAssignInput();
-    auto* assignOutput = NLDB0::getAssignOutput();
-    if (assignModel == nullptr || assignInput == nullptr ||
-        assignOutput == nullptr) {
-      throw std::logic_error(
-          "internal error: the NLDB0 assign primitive is unavailable");
-    }
-
-    SNLBitNet* originalNet = boundaryTerm->getNet();
-    auto* bridgeNet = SNLScalarNet::create(top_);
-    auto* bridge = SNLInstance::create(
-        top_, assignModel, NLName("__kepler_boundary_anchor"));
-    if (boundaryTerm->getDirection() == SNLTerm::Direction::Output) {
-      bridge->getInstTerm(assignInput)->setNet(originalNet);
-      bridge->getInstTerm(assignOutput)->setNet(bridgeNet);
-      boundaryTerm->setNet(bridgeNet);
-    } else {
-      boundaryTerm->setNet(bridgeNet);
-      bridge->getInstTerm(assignInput)->setNet(bridgeNet);
-      bridge->getInstTerm(assignOutput)->setNet(originalNet);
-    }
-  }
-
-  NLDB* sourceDB_ = nullptr;
-  SNLDesign* previousDBTop_ = nullptr;
-  NLDB* previousUniverseTopDB_ = nullptr;
-  NLLibrary* scratchLibrary_ = nullptr;
-  SNLDesign* top_ = nullptr;
-  std::vector<BoundaryPort> ports_;
-};
-
-BoundaryDesign::BoundaryDesign(SNLDesign* top,
-                               const BoundaryPairs& pairs,
-                               size_t side)
-    : impl_(std::make_unique<Impl>(top, pairs, side)) {}
-
-BoundaryDesign::~BoundaryDesign() = default;
-BoundaryDesign::BoundaryDesign(BoundaryDesign&&) noexcept = default;
-BoundaryDesign& BoundaryDesign::operator=(BoundaryDesign&&) noexcept = default;
-
-SNLDesign* BoundaryDesign::getTop() const {
-  return impl_ == nullptr ? nullptr : impl_->top_;
 }
 
-const std::vector<BoundaryPort>& BoundaryDesign::getPorts() const {
-  if (impl_ == nullptr) {
-    throw std::logic_error("getPorts called on moved-from BoundaryDesign");
+const BoundaryPort* LogicalBoundary::getPort(DNLID id) const {
+  const auto found = portIndices_.find(id);
+  return found == portIndices_.end() ? nullptr : &ports_[found->second];
+}
+
+LogicalBoundary::LogicalBoundary(const naja::DNL::DNLFull& dnl,
+                                 const BoundaryPairs& pairs, size_t side) {
+  using namespace naja::DNL;
+  const auto specs = preflight(
+      const_cast<SNLDesign*>(dnl.getTop().getSNLModel()), pairs, side);
+  excluded_.resize(dnl.getDNLInstances().size(), false);
+  for (const auto& spec : specs) {
+    const DNLInstanceFull* instance = &dnl.getTop();
+    for (const auto& component : spec.components) {
+      instance = &instance->getChildInstance(
+          instance->getSNLModel()->getInstance(NLName(component)));
+    }
+    for (const auto& candidate : dnl.getDNLInstances()) {
+      if (!candidate.isNull() && candidate.isUnder(*instance)) {
+        excluded_[candidate.getID()] = true;
+      }
+    }
+    for (const auto& pin : spec.pins) {
+      const DNLID id = instance->getTerminalFromBitTerm(pin.term).getID();
+      portIndices_.emplace(id, ports_.size());
+      ports_.push_back(pin.port);
+      (pin.port.isInput ? outputs_ : inputs_).push_back(id);
+    }
   }
-  return impl_->ports_;
+
+  // Union terminals only across nets outside the selected occurrences.
+  // A hierarchical terminal joins parent/child nets normally; omitting the
+  // selected model's nets turns its pins into a directional logical boundary.
+  const size_t count = dnl.getNBterms();
+  signalIDs_.resize(count);
+  for (DNLID id = 0; id < count; ++id) signalIDs_[id] = id;
+  auto root = [&](DNLID id) {
+    while (signalIDs_[id] != id) {
+      signalIDs_[id] = signalIDs_[signalIDs_[id]];
+      id = signalIDs_[id];
+    }
+    return id;
+  };
+  std::vector<std::pair<DNLID, DNLIso::IsoType>> constants;
+  for (const auto& instance : dnl.getDNLInstances()) {
+    if (instance.isNull() || containsInstance(instance.getID()) ||
+        instance.getSNLModel()->isAssign()) continue;
+    for (const auto* net : instance.getSNLModel()->getBitNets()) {
+      DNLID first = DNLID_MAX;
+      auto join = [&](DNLID id) {
+        if (first == DNLID_MAX) first = id;
+        else signalIDs_[root(id)] = root(first);
+      };
+      for (const auto* term : net->getBitTerms()) {
+        join(instance.getTerminalFromBitTerm(term).getID());
+      }
+      for (const auto* term : net->getInstTerms()) {
+        join(instance.getChildInstance(term->getInstance())
+                 .getTerminal(term).getID());
+      }
+      if (first != DNLID_MAX && net->isConstant()) {
+        constants.emplace_back(first,
+            net->isConstant0() ? DNLIso::CONST0 :
+            net->isConstant1() ? DNLIso::CONST1 :
+            net->isConstantX() ? DNLIso::CONSTX : DNLIso::CONSTZ);
+      }
+    }
+  }
+  signals_.resize(count);
+  for (DNLID id = 0; id < count; ++id) {
+    const auto signalID = root(id);
+    signalIDs_[id] = signalID;
+    auto& signal = signals_[signalID];
+    signal.setId(signalID);
+    const auto& term = dnl.getDNLTerminalFromID(id);
+    const auto& instance = term.getDNLInstance();
+    if (containsInstance(instance.getID()) && !getPort(id)) continue;
+    const auto direction = term.getSnlBitTerm()->getDirection();
+    if (isInput(id) ||
+        (instance.isTop() && direction != SNLTerm::Direction::Output) ||
+        (!containsInstance(instance.getID()) && !instance.isTop() &&
+         instance.getSNLModel()->getInstances().empty() &&
+         direction != SNLTerm::Direction::Input)) {
+      signal.addDriver(id);
+    } else {
+      signal.addReader(id);
+    }
+  }
+  for (const auto& [id, type] : constants) {
+    auto& signal = signals_[signalIDs_[id]];
+    if (signal.isConstant() && signal.getType() != type) {
+      throw std::invalid_argument("conflicting constants outside boundary");
+    }
+    signal.setIsoType(type);
+  }
 }
 
 void validateBoundaryInterfaces(const std::vector<BoundaryPort>& left,

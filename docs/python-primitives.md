@@ -11,6 +11,7 @@ as shared boundaries instead. Kepler then compares the signals driven into the
 block and gives both designs the same unconstrained block outputs. The Python
 live-design API exposes this through `VerificationOptions.set_as_boundary`; see
 [Treat selected instances as shared boundaries](python-api.md#treat-selected-instances-as-shared-boundaries).
+The boundary is logical and does not modify the loaded netlists.
 Use a primitive model when the block's behavior itself must constrain or
 participate in the proof.
 

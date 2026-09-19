@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 #include "BoolExpr.h"
+#include "DesignBoundary.h"
 #include "DNL.h"
 #include <tbb/concurrent_unordered_map.h>
 #include <mutex>
@@ -58,6 +59,16 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   BuildPrimaryOutputClauses() = default;
   void collect();
   void build();
+  void setBoundaryPairs(const BoundaryPairs& pairs, size_t side) {
+    boundaryPairs_ = pairs;
+    boundarySide_ = side;
+  }
+  const LogicalBoundary* getLogicalBoundary() const {
+    return borrowedBoundary_ ? borrowedBoundary_ : logicalBoundary_.get();
+  }
+  void setLogicalBoundary(const LogicalBoundary* boundary) {
+    borrowedBoundary_ = boundary;
+  }
 
   const tbb::concurrent_vector<BoolExpr*>& getPOs() const {
     return POs_;
@@ -120,6 +131,11 @@ class BuildPrimaryOutputClauses {  // LCOV_EXCL_LINE
   std::vector<naja::DNL::DNLID> collectOutputs();
   void setOutputs2OutputsIDs();
   void initVarNames();
+  const naja::DNL::DNLIso& getSignal(naja::DNL::DNLID termID) const;
+  BoundaryPairs boundaryPairs_;
+  size_t boundarySide_ = 0;
+  std::unique_ptr<LogicalBoundary> logicalBoundary_;
+  const LogicalBoundary* borrowedBoundary_ = nullptr;
   
   tbb::concurrent_vector<BoolExpr*> POs_;
   std::vector<naja::DNL::DNLID> inputs_;

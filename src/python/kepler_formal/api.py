@@ -106,14 +106,14 @@ def verify_designs(
     *,
     options: VerificationOptions | None = None,
 ) -> VerificationResult:
-    """Compare two live NajaEDA designs without files or rebuilding.
+    """Compare two live NajaEDA designs without files, copying, or rebuilding.
 
     Each argument must be a :class:`NativeDesign` or a raw
     ``najaeda.naja.SNLDesign``.  Capture high-level ``Instance`` objects first
     with :func:`from_najaeda`; this freezes which model the instance denotes,
     while retaining the original object for the synchronous native call.
-    Selected boundaries are applied to temporary clones; otherwise the native
-    designs are analyzed directly.
+    Selected instance pins act as logical verification boundaries; the native
+    designs are analyzed directly without modification.
     The caller owns both netlists; verification leaves them available for
     further edits and calls, including when verification reports an error.
     """

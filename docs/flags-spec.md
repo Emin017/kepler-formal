@@ -140,12 +140,13 @@ kepler-formal -verilog design0.v design1.v \
   --set-as-boundary u_io/u_phy u_io/u_phy_gate
 ```
 
-For each selected instance, input pins become additional compared top outputs.
+For each selected instance, input pins act as additional compared outputs.
 This proves that both surrounding designs drive the abstracted block the same
-way. Output pins become additional shared top inputs, so the proof considers
+way. Output pins act as additional shared inputs, so the proof considers
 all possible values produced by the abstracted block without checking its
 implementation. Original top-level ports and all logic outside the selected
-instances remain part of the normal equivalence result.
+instances remain part of the normal equivalence result. These are logical
+verification boundaries: no netlist instances, ports, or connections are changed.
 
 The two sides must expose matching pin names, bit ranges, and directions at
 each paired boundary. Instance input pins must be connected, and nonconstant
@@ -153,7 +154,10 @@ input nets must have exactly one driver; unused output pins are allowed.
 Inout pins, aliased or multiply driven output nets, duplicate
 paths, and selections where one path is an ancestor of another are rejected.
 Kepler Formal validates these conditions before starting the proof. Boundary
-selection supports both LEC and SEC, including compact mode. It cannot
+selection supports both LEC and SEC, including compact mode, and all input
+formats (`v`, `sv`, and `sv2v`; SV formats require SEC). Paths use elaborated
+instance names, which can differ from source names for generated SV scopes.
+Boundary selection cannot
 currently be combined with `use_scopes` or `clean_scopes`.
 
 The equivalent YAML form is:

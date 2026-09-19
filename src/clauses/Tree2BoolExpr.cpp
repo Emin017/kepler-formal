@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "Tree2BoolExpr.h"
+#include "DesignBoundary.h"
 #include "BoolExpr.h"
 #include "DNL.h"
 #include "NLDB0.h"
@@ -387,7 +388,7 @@ BoolExpr* buildDivModTruthTableExpr(
     const SNLTruthTable& table,
     uint32_t arity,
     const SNLTruthTableTree::Node* node,
-    naja::DNL::DNLID isoID) {
+    naja::DNL::DNLID isoID, const LogicalBoundary* boundary) {
   const uint32_t width = table.getDivModWidth();
   if (arity != width * 2 || node == nullptr) {
     throw std::runtime_error("DIVMOD truth table metadata mismatch");  // LCOV_EXCL_LINE
@@ -446,7 +447,7 @@ BoolExpr* buildDivModTruthTableExpr(
       continue;  // LCOV_EXCL_LINE
     }
 
-    const auto outputIsoID = term.getIsoID();
+    const auto outputIsoID = boundary ? boundary->getSignal(term.getID()).getIsoID() : term.getIsoID();
     if (outputIsoID != naja::DNL::DNLID_MAX) {
       Tree2BoolExpr::iso2boolExpr_.insert({outputIsoID, expression});
     }
@@ -472,7 +473,7 @@ BoolExpr* buildGenericTruthTableExpr(
     const SNLTruthTable& tbl,
     uint32_t k,
     const SNLTruthTableTree::Node* node,
-    naja::DNL::DNLID isoID) {
+    naja::DNL::DNLID isoID, const LogicalBoundary* boundary = nullptr) {
   assert(k > 0);
 
   BoolExpr* expr = getChildFETS(0);
@@ -507,7 +508,7 @@ BoolExpr* buildGenericTruthTableExpr(
     case SNLTruthTable::GenericType::TABLE_SELECT:
       return buildTableSelectTruthTableExpr(tbl, k);
     case SNLTruthTable::GenericType::DIVMOD:
-      return buildDivModTruthTableExpr(tbl, k, node, isoID);
+      return buildDivModTruthTableExpr(tbl, k, node, isoID, boundary);
     case SNLTruthTable::GenericType::NONE:
       // LCOV_EXCL_START
       // LCOV_DISABLED_START
@@ -541,7 +542,8 @@ std::vector<Frame, tbb::tbb_allocator<Frame>>& getStackETS() {
 // The varNames vector maps SNL variable indices to desired variable IDs
 // (or special markers like 0/1 for constants).
 BoolExpr* Tree2BoolExpr::convert(
-  const SNLTruthTableTree& tree, const std::vector<size_t>& varNames) {
+  const SNLTruthTableTree& tree, const std::vector<size_t>& varNames,
+  const LogicalBoundary* boundary) {
 
   const auto root = tree.getRoot();
   if (!root) {
@@ -569,7 +571,8 @@ BoolExpr* Tree2BoolExpr::convert(
 
     naja::DNL::DNLID isoID = naja::DNL::DNLID_MAX;
     if (node->type != SNLTruthTableTree::Node::Type::Input) {
-      isoID = naja::DNL::get()->getDNLTerminalFromID(node->data.termid).getIsoID();
+      isoID = boundary ? boundary->getSignal(node->data.termid).getIsoID() :
+          naja::DNL::get()->getDNLTerminalFromID(node->data.termid).getIsoID();
     }
 
     bool visited = f.second;
@@ -682,7 +685,7 @@ BoolExpr* Tree2BoolExpr::convert(
         }
 
         if (tbl.isGeneric()) {
-          BoolExpr* expr = buildGenericTruthTableExpr(tbl, k, node, isoID);
+          BoolExpr* expr = buildGenericTruthTableExpr(tbl, k, node, isoID, boundary);
           if (isoID != naja::DNL::DNLID_MAX) {
             // LCOV_EXCL_START
             // The duplicate insert path only happens through concurrent reuse of

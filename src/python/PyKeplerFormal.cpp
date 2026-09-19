@@ -544,7 +544,7 @@ PyMethodDef methods[] = {
     {"from_najaeda", fromNajaeda, METH_VARARGS,
      "Capture a live NajaEDA SNLDesign without copying its native netlist."},
     {"verify_designs", verifyDesigns, METH_VARARGS,
-     "Verify two captured NajaEDA designs without taking ownership."},
+     "Verify two captured NajaEDA designs without serialization or copying."},
     {"get_version", version, METH_NOARGS, "Return the Kepler Formal version."},
     {"get_git_hash", gitHash, METH_NOARGS, "Return the build git hash."},
     {nullptr, nullptr, 0, nullptr},

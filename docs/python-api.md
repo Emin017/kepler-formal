@@ -7,11 +7,9 @@ and returns an owning, structured result after each run.
 This is a direct, in-process binding. It does not start the command-line
 executable, use a subprocess, or communicate through MCP or another service.
 NajaEDA loads or creates the netlists; Kepler borrows those live designs for
-verification without serializing or rebuilding them. Verification normally
-uses the designs directly. When selected instances are configured as
-boundaries, Kepler transforms temporary clones and leaves the live designs
-unchanged. The separately installed `najaeda` package provides the single
-native netlist runtime shared by both APIs.
+verification without serializing, cloning, or rebuilding them. The separately
+installed `najaeda` package provides the single native netlist runtime shared
+by both APIs.
 
 ## Build and install
 
@@ -204,22 +202,22 @@ result = verify_designs(reference, implementation, options=options)
 
 The outer collection and each pair may be a list or tuple. Every pair must
 contain exactly two non-empty strings. Pair order is significant and duplicate
-or overlapping selections are rejected by the native boundary transformer.
+or overlapping selections are rejected by native boundary validation.
 
-For each selected instance, Kepler promotes its original input pins to extra
-top-level outputs, so the proof checks that the two designs drive the block
-identically. It promotes the instance's original output pins to shared
-top-level inputs, so both sides see the same unconstrained block response.
+For each selected instance, Kepler treats its input pins as extra compared
+outputs, so the proof checks that the two designs drive the block identically.
+It treats the instance's output pins as shared inputs, so both sides see the
+same unconstrained block response, without traversing the block's internals.
 Scalar and bus pin names, directions, widths, and ranges must match across each
 pair. `allow_boundary_mismatch` does not relax this selected-boundary interface
 check. Input pins must be connected, with exactly one driver on nonconstant
 input nets. Unused output pins are allowed; inout pins and aliased or multiply
 driven output nets are rejected.
 
-Boundary transformation works for both LEC and SEC. It is performed on
-temporary clones for the duration of the synchronous call; the caller's
-designs, connectivity, selected tops, and cached DNL remain unchanged and can
-be reused afterward. This option belongs to the live-design API. The Python
+Boundary selection works for both LEC and SEC without cloning or rewiring
+the netlists. The caller's designs, connectivity, selected tops, and cached
+DNL remain unchanged and can be reused afterward. This option belongs to the
+live-design API. The Python
 extension does not expose file loading or command-line configuration parsing.
 
 ## Statuses and errors

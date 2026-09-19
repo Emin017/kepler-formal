@@ -377,6 +377,14 @@ BuildPrimaryOutputClauses::PathNameIDs BuildPrimaryOutputClauses::getPathNameIDs
 BuildPrimaryOutputClauses::PathKey
 BuildPrimaryOutputClauses::getTerminalPathKey(
     const DNLTerminalFull& terminal) const {
+  if (const auto* boundary = getLogicalBoundary()) {
+    if (const auto* port = boundary->getPort(terminal.getID())) {
+      return {{PathComponentID{1} << 62,
+               static_cast<PathComponentID>(port->pairIndex),
+               static_cast<PathComponentID>(NLName(port->pinName).getID())},
+              {static_cast<NLID::DesignObjectID>(port->bit)}};
+    }
+  }
   auto pathIDs = getPathNameIDs(terminal.getDNLInstance());
   pathIDs.push_back(static_cast<PathComponentID>(
       terminal.getSnlBitTerm()->getName().getID()));
@@ -387,6 +395,7 @@ BuildPrimaryOutputClauses::getTerminalPathKey(
 
 std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   std::vector<DNLID> inputs;
+  if (const auto* boundary = getLogicalBoundary()) inputs = boundary->getInputs();
   auto dnl = get();
   DNLInstanceFull top = dnl->getTop();
 
@@ -402,6 +411,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   }
 
   for (DNLID leaf : dnl->getLeaves()) {
+    if (getLogicalBoundary() && getLogicalBoundary()->containsInstance(leaf)) continue;
     auto iter = modelCache_.find(dnl->getDNLInstanceFromID(leaf).getSNLModel());
     const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     if ((iter != modelCache_.end()) && iter->second.analyzedPIs) {
@@ -555,6 +565,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
 std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
   std::vector<DNLID> outputs;
   std::set<DNLID> outputsSet;
+  if (const auto* boundary = getLogicalBoundary()) {
+    outputsSet.insert(boundary->getOutputs().begin(), boundary->getOutputs().end());
+  }
   skippedOutputs_.clear();
   auto dnl = get();
   DNLInstanceFull top = dnl->getTop();
@@ -571,6 +584,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
   }
   for (DNLID leaf : dnl->getLeaves()) {
+    if (getLogicalBoundary() && getLogicalBoundary()->containsInstance(leaf)) continue;
     const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     auto iter = modelCache_.find(instance.getSNLModel());
     if ((iter != modelCache_.end()) && iter->second.analyzedPOs) {
@@ -688,7 +702,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
   // keep only terminals who are connected to nets
   for (const auto& out : outputsSet) {
     const DNLTerminalFull& term = dnl->getDNLTerminalFromID(out);
-    if (term.getIsoID() == DNLID_MAX) {
+    if (!getLogicalBoundary() && term.getIsoID() == DNLID_MAX) {
       DEBUG_LOG("Skipping output %s of model %s as it is not connected to any net\n",
                 term.getSnlBitTerm()->getName().getString().c_str(),
                 term.getSnlBitTerm()
@@ -698,8 +712,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
                     .c_str());
       continue;
     }
-    const auto& iso =
-        dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+    const auto& iso = getSignal(out);
     if (!iso.isConstant0() && !iso.isConstant1() &&
         iso.getDrivers().empty()) {
       const auto skip = describeUnmappedTerm(out, "its iso has no drivers");
@@ -738,6 +751,11 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
 }
 
 void BuildPrimaryOutputClauses::collect() {
+  logicalBoundary_.reset();
+  if (!boundaryPairs_.empty()) {
+    logicalBoundary_ = std::make_unique<LogicalBoundary>(
+        *get(), boundaryPairs_, boundarySide_);
+  }
   inputs_ = collectInputs();
   for (const auto& input : inputs_) {
     PathKey key = getTerminalPathKey(naja::DNL::get()->getDNLTerminalFromID(input));
@@ -764,7 +782,7 @@ BuildPrimaryOutputClauses::getLecBoundaryInputs() const {
   std::vector<PathKey> boundaries;
   for (const auto& [path, input] : inputsMap_) {
     const auto& term = get()->getDNLTerminalFromID(input);
-    if (term.isTopPort() ||
+    if (term.isTopPort() || (getLogicalBoundary() && getLogicalBoundary()->isInput(input)) ||
         !SNLDesignModeling::getOutputRelatedClocks(term.getSnlBitTerm()).empty()) {
       boundaries.emplace_back(path);
     }
@@ -778,7 +796,7 @@ void BuildPrimaryOutputClauses::initVarNames() {
     // Get Truth Table for terminal
     const DNLTerminalFull& tTerm = naja::DNL::get()->getDNLTerminalFromID(inputs_[i]);
     // If direction is input, skip
-    if (!tTerm.isTopPort() &&
+    if (!(getLogicalBoundary() && getLogicalBoundary()->isInput(inputs_[i])) && !tTerm.isTopPort() &&
         tTerm.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Input) {
       const auto tt = SNLDesignModeling::getTruthTable(
           tTerm.getDNLInstance().getSNLInstance(),
@@ -797,6 +815,14 @@ void BuildPrimaryOutputClauses::initVarNames() {
     }
     termDNLID2varID_[inputs_[i]] =
         i + 2;  // +2 to avoid 0 and 1 which are reserved for constants
+  }
+  if (getLogicalBoundary()) {
+    for (DNLID id = 0; id < get()->getNBterms(); ++id) {
+      const auto& signal = getSignal(id);
+      if (signal.isConstant0()) termDNLID2varID_[id] = 0;
+      if (signal.isConstant1()) termDNLID2varID_[id] = 1;
+    }
+    return;
   }
   for (DNLID constIsoID : naja::DNL::get()->getDNLIsoDB().getConstant0Isos()) {
     const auto& constIso = naja::DNL::get()->getDNLIsoDB().getIsoFromIsoIDconst(constIsoID);
@@ -859,7 +885,7 @@ void BuildPrimaryOutputClauses::build() {
   std::unordered_map<DNLID, size_t> firstOutputForIso;
   firstOutputForIso.reserve(outputs_.size());
   for (size_t i = 0; i < outputs_.size(); ++i) {
-    const DNLID isoID = get()->getDNLTerminalFromID(outputs_[i]).getIsoID();
+    const DNLID isoID = getSignal(outputs_[i]).getIsoID();
     if (isoID != DNLID_MAX) {
       auto [it, inserted] = firstOutputForIso.emplace(isoID, i);
       if (!inserted) {
@@ -884,10 +910,11 @@ void BuildPrimaryOutputClauses::build() {
                .c_str());
     #endif
 
-    DNLID isoID = get()->getDNLTerminalFromID(out).getIsoID();
+    const auto& signal = getSignal(out);
+    DNLID isoID = signal.getIsoID();
     DEBUG_LOG("isoID: %zu\n", isoID);
     if (isoID != DNLID_MAX) {
-      const auto& iso = get()->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+      const auto& iso = signal;
       if (iso.isConstant0()) {
         POs_[i] = BoolExpr::createFalse();
         return;
@@ -922,7 +949,7 @@ void BuildPrimaryOutputClauses::build() {
         out,
         IsPIs_,
         IsPOs_,
-        stopAtOpaqueInternalOutputs_);
+        stopAtOpaqueInternalOutputs_, getLogicalBoundary());
     #ifdef DEBUG_CHECKS
     auto startComp = std::chrono::steady_clock::now();
     #endif
@@ -944,14 +971,13 @@ void BuildPrimaryOutputClauses::build() {
     }
     // LCOV_EXCL_START
     if (cloud.getTruthTable().isValid()) {
-      auto hasCachedIsoExpression = [](DNLID termID) {
+      auto hasCachedIsoExpression = [&](DNLID termID) {
         if (termID == DNLID_MAX) {
           // LCOV_DISABLED_START
           return false;
           // LCOV_DISABLED_STOP
         }
-        const auto& term = get()->getDNLTerminalFromID(termID);
-        const DNLID termIsoID = term.getIsoID();
+        const DNLID termIsoID = getSignal(termID).getIsoID();
         if (termIsoID == DNLID_MAX) {
           // LCOV_DISABLED_START
           return false;
@@ -1010,7 +1036,7 @@ void BuildPrimaryOutputClauses::build() {
     auto startConv = std::chrono::steady_clock::now();
     #endif
     if (cloud.getTruthTable().isValid() && POs_[i] == nullptr) {
-      POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_);
+      POs_[i] = Tree2BoolExpr::convert(cloud.getTruthTable(), termDNLID2varID_, getLogicalBoundary());
     } else if (POs_[i] == nullptr) {
       POs_[i] = BoolExpr::createInvalid();
       SkippedOutputReason skipReason = SkippedOutputReason::None;
@@ -1114,27 +1140,19 @@ void BuildPrimaryOutputClauses::setInputs2InputsIDs() {
       throw std::runtime_error("Input terminal is null");  // LCOV_EXCL_LINE
       // LCOV_EXCL_STOP
     }
-    const DNLInstanceFull& currentInstance =
-        get()->getDNLTerminalFromID(input).getDNLInstance();
-    PathKey& pair = inputs2inputsIDs_[input];
-    pair.first = getPathNameIDs(currentInstance);
-    pair.first.emplace_back(
-        get()->getDNLTerminalFromID(input).getSnlBitTerm()->getName().getID());
-    pair.second.emplace_back(
-        get()->getDNLTerminalFromID(input).getSnlBitTerm()->getBit());
+    inputs2inputsIDs_[input] = getTerminalPathKey(get()->getDNLTerminalFromID(input));
   }
 }
 
 void BuildPrimaryOutputClauses::setOutputs2OutputsIDs() {
   outputs2outputsIDs_.clear();
   for (const auto& output : outputs_) {
-    const DNLInstanceFull& currentInstance =
-        get()->getDNLTerminalFromID(output).getDNLInstance();
-    PathKey& pair = outputs2outputsIDs_[output];
-    pair.first = getPathNameIDs(currentInstance);
-    pair.first.emplace_back(
-        get()->getDNLTerminalFromID(output).getSnlBitTerm()->getName().getID());
-    pair.second.emplace_back(
-        get()->getDNLTerminalFromID(output).getSnlBitTerm()->getBit());
+    outputs2outputsIDs_[output] = getTerminalPathKey(get()->getDNLTerminalFromID(output));
   }
+}
+
+const DNLIso& BuildPrimaryOutputClauses::getSignal(DNLID termID) const {
+  if (const auto* boundary = getLogicalBoundary()) return boundary->getSignal(termID);
+  return get()->getDNLIsoDB().getIsoFromIsoIDconst(
+      get()->getDNLTerminalFromID(termID).getIsoID());
 }

@@ -1530,6 +1530,55 @@ TEST_F(KeplerFormalCliTests, CliSetAsBoundaryAcceptsNestedSelfBoundary) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, CliSecNestedBoundaryAcrossHdlFormatsAndCompactMode) {
+  const auto design = [](bool changedInput, bool changedBody) {
+    return std::string("module leaf(input i, output o); assign o = 1'b") +
+        (changedBody ? "1" : "0") + "; endmodule\n" +
+        "module wrapper(input i, output o);\n"
+        "  leaf u_leaf(.i(i), .o(o));\n"
+        "endmodule\n"
+        "module top(input a, input b, output y);\n"
+        "  wrapper u_wrap(.i(" + (changedInput ? "b" : "a") +
+        "), .o(y));\nendmodule\n";
+  };
+  for (const std::string format : {"-verilog", "-sv", "-sv2v"}) {
+    for (const bool compact : {false, true}) {
+      for (const bool changedInput : {false, true}) {
+        SCOPED_TRACE(format + (compact ? " compact" : " normal") +
+                     (changedInput ? " changed input" : " equal input"));
+        // The selected instance is the wrapper's only child. Its differing
+        // internal function must be ignored, but its input must still be checked.
+        const auto fixture = createDesignFixture(
+            "v", design(false, false), design(changedInput, true));
+        {
+          CurrentPathGuard currentPathGuard;
+          std::filesystem::current_path(fixture.tmpDir);
+          std::vector<std::string> args = {
+              "kepler-formal", "-v", "sec", "--sec-engine", "k_induction",
+              "--sec-encoding", "binary", "-k", "1", format,
+              fixture.design0Path.string(), fixture.design1Path.string(),
+              "--set-as-boundary", "u_wrap/u_leaf", "u_wrap/u_leaf"};
+          if (compact) {
+            args.emplace_back("--compact");
+          }
+          const auto run = runStructuredWithArgs(std::move(args));
+          EXPECT_EQ(run.exitCode, changedInput ? kSecCounterexampleExitCode
+                                              : kSecProvedExitCode);
+          EXPECT_EQ(run.result.status, changedInput
+                        ? KEPLER_FORMAL::RunStatus::Different
+                        : KEPLER_FORMAL::RunStatus::Equivalent);
+          EXPECT_EQ(run.result.totalOutputs, 2u);
+          EXPECT_TRUE(run.result.skippedObservedOutputs.empty());
+          if (!changedInput) {
+            EXPECT_EQ(run.result.coveredOutputs, 2u);
+          }
+        }
+        std::filesystem::remove_all(fixture.tmpDir);
+      }
+    }
+  }
+}
+
 TEST_F(KeplerFormalCliTests, CliCompactSetAsBoundaryUsesEachSidePath) {
   const auto fixture = createEquivalentDesignFixture(
       "v",

@@ -40,6 +40,7 @@ class DesignBoundaryTests : public ::testing::Test {
   }
 
   void TearDown() override {
+    naja::DNL::destroy();
     if (NLUniverse::get() != nullptr) {
       NLUniverse::get()->destroy();
     }
@@ -69,7 +70,7 @@ class DesignBoundaryTests : public ::testing::Test {
     return model;
   }
 
-  static const BoundaryPort* findPort(const BoundaryDesign& boundary,
+  static const BoundaryPort* findPort(const BoundarySelection& boundary,
                                       size_t pairIndex,
                                       const std::string& pinName,
                                       int32_t bit = 0) {
@@ -88,262 +89,160 @@ class DesignBoundaryTests : public ::testing::Test {
   NLLibrary* primitives_ = nullptr;
 };
 
-TEST_F(DesignBoundaryTests, PromotesEveryPinBitAndLeavesSourceUntouched) {
-  auto* block = SNLDesign::create(
-      primitives_, SNLDesign::Type::Primitive, NLName("WIDE_BLOCK"));
-  auto* input = SNLBusTerm::create(
-      block, SNLTerm::Direction::Input, 3, 2, NLName("A"));
-  auto* output = SNLBusTerm::create(
-      block, SNLTerm::Direction::Output, 1, 0, NLName("Y"));
-
+TEST_F(DesignBoundaryTests, SelectsBusBitsWithoutChangingAnyDesignObjects) {
+  auto* block = SNLDesign::create(primitives_, SNLDesign::Type::Primitive);
+  auto* input = SNLBusTerm::create(block, SNLTerm::Direction::Input, 0, -1, NLName("A"));
+  auto* output = SNLBusTerm::create(block, SNLTerm::Direction::Output, 1, 0, NLName("Y"));
   auto* top = SNLDesign::create(designs_, NLName("top"));
   auto* instance = SNLInstance::create(top, block, NLName("u"));
-  for (int bit : {3, 2}) {
-    auto* net = addPort(
-        top, "a" + std::to_string(bit), SNLTerm::Direction::Input);
-    instance->getInstTerm(input->getBit(bit))->setNet(net);
+  for (int bit : {0, -1}) {
+    instance->getInstTerm(input->getBit(bit))->setNet(
+        addPort(top, "a" + std::to_string(bit), SNLTerm::Direction::Input));
   }
   for (int bit : {1, 0}) {
-    auto* net = addPort(
-        top, "y" + std::to_string(bit), SNLTerm::Direction::Output);
-    instance->getInstTerm(output->getBit(bit))->setNet(net);
+    instance->getInstTerm(output->getBit(bit))->setNet(
+        addPort(top, "y" + std::to_string(bit), SNLTerm::Direction::Output));
   }
-  db_->setTopDesign(top);
-  const size_t sourceTermCount = top->getTerms().size();
-  const size_t libraryCount = db_->getGlobalLibraries().size();
-
-  {
-    BoundaryDesign boundary(top, {{"u", "u"}}, 0);
-    ASSERT_NE(boundary.getTop(), top);
-    EXPECT_EQ(top, db_->getTopDesign());
-    EXPECT_NE(nullptr, top->getInstance(NLName("u")));
-    EXPECT_EQ(sourceTermCount, top->getTerms().size());
-    EXPECT_EQ(nullptr, boundary.getTop()->getInstance(NLName("u")));
-    ASSERT_EQ(4u, boundary.getPorts().size());
-
-    for (int bit : {3, 2}) {
-      const auto* port = findPort(boundary, 0, "A", bit);
-      ASSERT_NE(nullptr, port);
-      EXPECT_TRUE(port->isInput);
-      EXPECT_EQ(2u, port->width);
-      EXPECT_EQ(3, port->msb);
-      EXPECT_EQ(2, port->lsb);
-      auto* promoted =
-          boundary.getTop()->getScalarTerm(NLName(port->topTermName));
-      ASSERT_NE(nullptr, promoted);
-      EXPECT_EQ(SNLTerm::Direction::Output, promoted->getDirection());
-      EXPECT_NE(nullptr, promoted->getNet());
-    }
-    for (int bit : {1, 0}) {
-      const auto* port = findPort(boundary, 0, "Y", bit);
-      ASSERT_NE(nullptr, port);
-      EXPECT_FALSE(port->isInput);
-      EXPECT_EQ(2u, port->width);
-      EXPECT_EQ(1, port->msb);
-      EXPECT_EQ(0, port->lsb);
-      auto* promoted =
-          boundary.getTop()->getScalarTerm(NLName(port->topTermName));
-      ASSERT_NE(nullptr, promoted);
-      EXPECT_EQ(SNLTerm::Direction::Input, promoted->getDirection());
-      EXPECT_NE(nullptr, promoted->getNet());
-    }
-
-    // If a client temporarily makes the scratch design active, RAII restores
-    // the caller's top before releasing the scratch library.
-    universe_->setTopDesign(boundary.getTop());
-  }
-  EXPECT_EQ(top, db_->getTopDesign());
-  EXPECT_EQ(libraryCount, db_->getGlobalLibraries().size());
+  universe_->setTopDesign(top);
+  const auto libraries = db_->getGlobalLibraries().size();
+  const auto nets = top->getNets().size();
+  const auto terms = top->getTerms().size();
+  BoundarySelection selection(top, {{"u", "u"}}, 0);
+  ASSERT_EQ(4u, selection.getPorts().size());
+  const auto* port = findPort(selection, 0, "A", -1);
+  ASSERT_NE(nullptr, port);
+  EXPECT_EQ(2u, port->width);
+  EXPECT_EQ(0, port->msb);
+  EXPECT_EQ(-1, port->lsb);
+  const auto* dnl = naja::DNL::get();
+  const auto dnlTerms = dnl->getNBterms();
+  LogicalBoundary boundary(*dnl, {{"u", "u"}}, 0);
+  EXPECT_EQ(2u, boundary.getInputs().size());
+  EXPECT_EQ(2u, boundary.getOutputs().size());
+  EXPECT_EQ(dnlTerms, dnl->getNBterms());
+  EXPECT_EQ(instance, top->getInstance(NLName("u")));
+  EXPECT_EQ(block, instance->getModel());
+  EXPECT_EQ(libraries, db_->getGlobalLibraries().size());
+  EXPECT_EQ(nets, top->getNets().size());
+  EXPECT_EQ(terms, top->getTerms().size());
+  EXPECT_EQ(top, universe_->getTopDesign());
 }
 
-TEST_F(DesignBoundaryTests, EmptyBoundaryListClonesAnEmptyDesign) {
-  auto* top = SNLDesign::create(designs_, NLName("empty_top"));
-
-  BoundaryDesign boundary(top, {}, 0);
-  ASSERT_NE(nullptr, boundary.getTop());
-  EXPECT_NE(top, boundary.getTop());
-  EXPECT_TRUE(boundary.getPorts().empty());
-  EXPECT_EQ(0u, boundary.getTop()->getInstances().size());
-  EXPECT_EQ(0u, boundary.getTop()->getTerms().size());
+TEST_F(DesignBoundaryTests, LogicalCutDoesNotFollowInternalWireAliasOrConstant) {
+  for (bool constant : {false, true}) {
+    SCOPED_TRACE(constant);
+    auto* block = SNLDesign::create(designs_);
+    auto* a = SNLScalarTerm::create(block, SNLTerm::Direction::Input, NLName("A"));
+    auto* y = SNLScalarTerm::create(block, SNLTerm::Direction::Output, NLName("Y"));
+    auto* inner = SNLScalarNet::create(block);
+    y->setNet(inner);
+    if (constant) inner->setType(SNLNet::Type::Assign1);
+    else a->setNet(inner);
+    auto* top = SNLDesign::create(designs_);
+    auto* input = addPort(top, "a", SNLTerm::Direction::Input);
+    auto* output = addPort(top, "y", SNLTerm::Direction::Output);
+    auto* instance = SNLInstance::create(top, block, NLName("u"));
+    instance->getInstTerm(a)->setNet(input);
+    instance->getInstTerm(y)->setNet(output);
+    universe_->setTopDesign(top);
+    const auto* dnl = naja::DNL::get();
+    const auto& occurrence = dnl->getTop().getChildInstance(instance);
+    const auto inputID = occurrence.getTerminalFromBitTerm(a).getID();
+    const auto outputID = occurrence.getTerminalFromBitTerm(y).getID();
+    const auto topInputID = dnl->getTop().getTerminalFromBitTerm(
+        top->getScalarTerm(NLName("a"))).getID();
+    const auto topOutputID = dnl->getTop().getTerminalFromBitTerm(
+        top->getScalarTerm(NLName("y"))).getID();
+    const auto originalIso = dnl->getDNLTerminalFromID(outputID).getIsoID();
+    LogicalBoundary boundary(*dnl, {{"u", "u"}}, 0);
+    EXPECT_TRUE(boundary.isInput(outputID));
+    EXPECT_TRUE(boundary.isOutput(inputID));
+    EXPECT_NE(boundary.getSignal(inputID).getIsoID(),
+              boundary.getSignal(outputID).getIsoID());
+    ASSERT_EQ(1u, boundary.getSignal(topOutputID).getDrivers().size());
+    EXPECT_EQ(outputID, boundary.getSignal(topOutputID).getDrivers().front());
+    EXPECT_EQ(topInputID, boundary.getSignal(inputID).getDrivers().front());
+    EXPECT_FALSE(boundary.getSignal(outputID).isConstant());
+    EXPECT_EQ(originalIso, dnl->getDNLTerminalFromID(outputID).getIsoID());
+    EXPECT_EQ(inner, y->getNet());
+    EXPECT_EQ(input, instance->getInstTerm(a)->getNet());
+    EXPECT_EQ(output, instance->getInstTerm(y)->getNet());
+    naja::DNL::destroy();
+  }
 }
 
-TEST_F(DesignBoundaryTests, HierarchicalCutUniquifiesOnlySelectedOccurrence) {
+TEST_F(DesignBoundaryTests, NestedOccurrenceDoesNotAffectSiblingUsingSameModel) {
   auto* block = createScalarBlock("BLOCK", {"A"}, {"Y"});
   auto* wrapper = SNLDesign::create(designs_, NLName("wrapper"));
-  auto* wrapperInput = SNLScalarTerm::create(
-      wrapper, SNLTerm::Direction::Input, NLName("I"));
-  auto* wrapperOutput = SNLScalarTerm::create(
-      wrapper, SNLTerm::Direction::Output, NLName("O"));
-  auto* inputNet = SNLScalarNet::create(wrapper, NLName("input"));
-  auto* outputNet = SNLScalarNet::create(wrapper, NLName("output"));
-  wrapperInput->setNet(inputNet);
-  wrapperOutput->setNet(outputNet);
+  auto* a = addPort(wrapper, "A", SNLTerm::Direction::Input);
+  auto* y = addPort(wrapper, "Y", SNLTerm::Direction::Output);
   auto* leaf = SNLInstance::create(wrapper, block, NLName("leaf"));
-  leaf->getInstTerm(block->getScalarTerm(NLName("A")))->setNet(inputNet);
-  leaf->getInstTerm(block->getScalarTerm(NLName("Y")))->setNet(outputNet);
-
-  auto* top = SNLDesign::create(designs_, NLName("top"));
-  auto* topInput = addPort(top, "a", SNLTerm::Direction::Input);
-  auto* topOutput = addPort(top, "y", SNLTerm::Direction::Output);
-  auto* selected = SNLInstance::create(top, wrapper, NLName("selected"));
-  auto* untouched = SNLInstance::create(top, wrapper, NLName("untouched"));
-  selected->getInstTerm(wrapperInput)->setNet(topInput);
-  selected->getInstTerm(wrapperOutput)->setNet(topOutput);
-
-  BoundaryDesign boundary(top, {{"selected/leaf", "selected/leaf"}}, 0);
-  auto* clonedSelected = boundary.getTop()->getInstance(NLName("selected"));
-  auto* clonedUntouched = boundary.getTop()->getInstance(NLName("untouched"));
-  ASSERT_NE(nullptr, clonedSelected);
-  ASSERT_NE(nullptr, clonedUntouched);
-  EXPECT_NE(wrapper, clonedSelected->getModel());
-  EXPECT_EQ(wrapper, clonedUntouched->getModel());
-  EXPECT_EQ(nullptr, clonedSelected->getModel()->getInstance(NLName("leaf")));
-  EXPECT_NE(nullptr, wrapper->getInstance(NLName("leaf")));
-
-  const auto* inputPort = findPort(boundary, 0, "A");
-  const auto* outputPort = findPort(boundary, 0, "Y");
-  ASSERT_NE(nullptr, inputPort);
-  ASSERT_NE(nullptr, outputPort);
-  auto* innerInput = clonedSelected->getModel()->getScalarTerm(
-      NLName(inputPort->topTermName));
-  auto* outerInput =
-      boundary.getTop()->getScalarTerm(NLName(inputPort->topTermName));
-  ASSERT_NE(nullptr, innerInput);
-  ASSERT_NE(nullptr, outerInput);
-  EXPECT_EQ(
-      outerInput->getNet(), clonedSelected->getInstTerm(innerInput)->getNet());
-
-  // The wrapper's pre-existing output alias remains connected while the new
-  // boundary PI replaces the removed leaf's driver on the same inner net.
-  auto* clonedWrapperOutput =
-      clonedSelected->getModel()->getScalarTerm(NLName("O"));
-  auto* innerOutput = clonedSelected->getModel()->getScalarTerm(
-      NLName(outputPort->topTermName));
-  ASSERT_NE(nullptr, clonedWrapperOutput);
-  ASSERT_NE(nullptr, innerOutput);
-  EXPECT_EQ(clonedWrapperOutput->getNet(), innerOutput->getNet());
-  EXPECT_EQ(nullptr, wrapper->getTerm(NLName(inputPort->topTermName)));
-  EXPECT_EQ(nullptr, wrapper->getTerm(NLName(outputPort->topTermName)));
-  EXPECT_EQ(wrapper, untouched->getModel());
-}
-
-TEST_F(DesignBoundaryTests, AliasedInputsBecomeSeparateOutputsOnTheSameNet) {
-  auto* block = createScalarBlock("ALIASED_INPUTS", {"A", "B"}, {"Y"});
-  auto* top = SNLDesign::create(designs_, NLName("top"));
-  auto* sharedInput = addPort(top, "a", SNLTerm::Direction::Input);
-  auto* output = addPort(top, "y", SNLTerm::Direction::Output);
-  auto* instance = SNLInstance::create(top, block, NLName("u"));
-  instance->getInstTerm(block->getScalarTerm(NLName("A")))->setNet(sharedInput);
-  instance->getInstTerm(block->getScalarTerm(NLName("B")))->setNet(sharedInput);
-  instance->getInstTerm(block->getScalarTerm(NLName("Y")))->setNet(output);
-
-  BoundaryDesign boundary(top, {{"u", "u"}}, 0);
-  const auto* a = findPort(boundary, 0, "A");
-  const auto* b = findPort(boundary, 0, "B");
-  ASSERT_NE(nullptr, a);
-  ASSERT_NE(nullptr, b);
-  auto* promotedA = boundary.getTop()->getScalarTerm(NLName(a->topTermName));
-  auto* promotedB = boundary.getTop()->getScalarTerm(NLName(b->topTermName));
-  ASSERT_NE(nullptr, promotedA);
-  ASSERT_NE(nullptr, promotedB);
-  EXPECT_NE(promotedA, promotedB);
-  EXPECT_EQ(promotedA->getNet(), promotedB->getNet());
-}
-
-TEST_F(DesignBoundaryTests, ConnectedBoundariesRetainTheirEquality) {
-  auto* block = createScalarBlock("CHAIN_BLOCK", {"A"}, {"Y"});
+  leaf->getInstTerm(block->getScalarTerm(NLName("A")))->setNet(a);
+  leaf->getInstTerm(block->getScalarTerm(NLName("Y")))->setNet(y);
   auto* top = SNLDesign::create(designs_, NLName("top"));
   auto* input = addPort(top, "a", SNLTerm::Direction::Input);
-  auto* output = addPort(top, "y", SNLTerm::Direction::Output);
-  auto* middle = SNLScalarNet::create(top, NLName("middle"));
-  auto* first = SNLInstance::create(top, block, NLName("first"));
-  auto* second = SNLInstance::create(top, block, NLName("second"));
-  first->getInstTerm(block->getScalarTerm(NLName("A")))->setNet(input);
-  first->getInstTerm(block->getScalarTerm(NLName("Y")))->setNet(middle);
-  second->getInstTerm(block->getScalarTerm(NLName("A")))->setNet(middle);
-  second->getInstTerm(block->getScalarTerm(NLName("Y")))->setNet(output);
-
-  BoundaryPairs pairs{{"first", "first"}, {"second", "second"}};
-  BoundaryDesign boundary(top, pairs, 0);
-  const auto* firstOutput = findPort(boundary, 0, "Y");
-  const auto* secondInput = findPort(boundary, 1, "A");
-  ASSERT_NE(nullptr, firstOutput);
-  ASSERT_NE(nullptr, secondInput);
-  auto* promotedFirstOutput = boundary.getTop()->getScalarTerm(
-      NLName(firstOutput->topTermName));
-  auto* promotedSecondInput = boundary.getTop()->getScalarTerm(
-      NLName(secondInput->topTermName));
-  ASSERT_NE(nullptr, promotedFirstOutput);
-  ASSERT_NE(nullptr, promotedSecondInput);
-  ASSERT_EQ(1u, boundary.getTop()->getInstances().size());
-  auto* bridge = *boundary.getTop()->getInstances().begin();
-  ASSERT_TRUE(NLDB0::isAssign(bridge->getModel()));
-  EXPECT_EQ(
-      promotedFirstOutput->getNet(),
-      bridge->getInstTerm(NLDB0::getAssignInput())->getNet());
-  EXPECT_EQ(
-      promotedSecondInput->getNet(),
-      bridge->getInstTerm(NLDB0::getAssignOutput())->getNet());
-  EXPECT_EQ(nullptr, boundary.getTop()->getInstance(NLName("first")));
-  EXPECT_EQ(nullptr, boundary.getTop()->getInstance(NLName("second")));
+  for (const std::string name : {"first", "second"}) {
+    auto* instance = SNLInstance::create(top, wrapper, NLName(name));
+    instance->getInstTerm(wrapper->getScalarTerm(NLName("A")))->setNet(input);
+    instance->getInstTerm(wrapper->getScalarTerm(NLName("Y")))->setNet(
+        addPort(top, name, SNLTerm::Direction::Output));
+  }
+  universe_->setTopDesign(top);
+  const auto* dnl = naja::DNL::get();
+  const auto& first = dnl->getTop().getChildInstance(top->getInstance(NLName("first")));
+  const auto& second = dnl->getTop().getChildInstance(top->getInstance(NLName("second")));
+  LogicalBoundary boundary(*dnl, {{"first/leaf", "first/leaf"}}, 0);
+  EXPECT_FALSE(boundary.containsInstance(first.getID()));
+  EXPECT_TRUE(boundary.containsInstance(first.getChildInstance(leaf).getID()));
+  EXPECT_FALSE(boundary.containsInstance(second.getChildInstance(leaf).getID()));
+  EXPECT_EQ(wrapper, top->getInstance(NLName("first"))->getModel());
+  EXPECT_EQ(wrapper, top->getInstance(NLName("second"))->getModel());
+  EXPECT_EQ(leaf, wrapper->getInstance(NLName("leaf")));
 }
 
-TEST_F(DesignBoundaryTests, UnconnectedOutputGetsFreshBoundaryInputNet) {
-  auto* block = createScalarBlock("UNUSED_OUTPUT", {"A"}, {"Y"});
+TEST_F(DesignBoundaryTests, HierarchicalBoundaryExcludesAllDescendants) {
+  auto* block = createScalarBlock("BLOCK", {"A"}, {"Y"});
+  auto* wrapper = SNLDesign::create(designs_, NLName("wrapper"));
+  auto* a = addPort(wrapper, "A", SNLTerm::Direction::Input);
+  auto* y = addPort(wrapper, "Y", SNLTerm::Direction::Output);
+  auto* leaf = SNLInstance::create(wrapper, block, NLName("leaf"));
+  leaf->getInstTerm(block->getScalarTerm(NLName("A")))->setNet(a);
+  leaf->getInstTerm(block->getScalarTerm(NLName("Y")))->setNet(y);
   auto* top = SNLDesign::create(designs_, NLName("top"));
-  auto* input = addPort(top, "a", SNLTerm::Direction::Input);
-  auto* instance = SNLInstance::create(top, block, NLName("u"));
-  instance->getInstTerm(block->getScalarTerm(NLName("A")))->setNet(input);
-
-  BoundaryDesign boundary(top, {{"u", "u"}}, 0);
-  const auto* outputPort = findPort(boundary, 0, "Y");
-  ASSERT_NE(nullptr, outputPort);
-  auto* promoted =
-      boundary.getTop()->getScalarTerm(NLName(outputPort->topTermName));
-  ASSERT_NE(nullptr, promoted);
-  EXPECT_EQ(SNLTerm::Direction::Input, promoted->getDirection());
-  ASSERT_NE(nullptr, promoted->getNet());
-  ASSERT_EQ(1u, boundary.getTop()->getInstances().size());
-  auto* bridge = *boundary.getTop()->getInstances().begin();
-  ASSERT_TRUE(NLDB0::isAssign(bridge->getModel()));
-  EXPECT_EQ(
-      promoted->getNet(),
-      bridge->getInstTerm(NLDB0::getAssignInput())->getNet());
-  ASSERT_NE(nullptr, bridge->getInstTerm(NLDB0::getAssignOutput())->getNet());
-  EXPECT_NE(
-      promoted->getNet(),
-      bridge->getInstTerm(NLDB0::getAssignOutput())->getNet());
+  auto* instance = SNLInstance::create(top, wrapper, NLName("u"));
+  instance->getInstTerm(wrapper->getScalarTerm(NLName("A")))->setNet(
+      addPort(top, "a", SNLTerm::Direction::Input));
+  instance->getInstTerm(wrapper->getScalarTerm(NLName("Y")))->setNet(
+      addPort(top, "y", SNLTerm::Direction::Output));
+  universe_->setTopDesign(top);
+  const auto* dnl = naja::DNL::get();
+  const auto& selected = dnl->getTop().getChildInstance(instance);
+  LogicalBoundary boundary(*dnl, {{"u", "u"}}, 0);
+  EXPECT_TRUE(boundary.containsInstance(selected.getID()));
+  EXPECT_TRUE(boundary.containsInstance(selected.getChildInstance(leaf).getID()));
+  EXPECT_EQ(1u, boundary.getInputs().size());
+  EXPECT_EQ(1u, boundary.getOutputs().size());
 }
 
-TEST_F(DesignBoundaryTests, BuffersAConstantCheckpointOnAnInstanceFreeTop) {
-  auto* block = createScalarBlock("INPUT_ONLY", {"A"}, {});
+TEST_F(DesignBoundaryTests, ConstantInputAndUnusedOutputNeedNoNewNetsOrInstances) {
+  auto* block = createScalarBlock("BLOCK", {"A"}, {"Y"});
   auto* top = SNLDesign::create(designs_, NLName("top"));
-  auto* constant = SNLScalarNet::create(top, NLName("constant"));
+  auto* constant = SNLScalarNet::create(top);
   constant->setType(SNLNet::Type::Assign0);
   auto* instance = SNLInstance::create(top, block, NLName("u"));
   instance->getInstTerm(block->getScalarTerm(NLName("A")))->setNet(constant);
-
-  BoundaryDesign boundary(top, {{"u", "u"}}, 0);
-  const auto* inputPort = findPort(boundary, 0, "A");
-  ASSERT_NE(nullptr, inputPort);
-  auto* promoted =
-      boundary.getTop()->getScalarTerm(NLName(inputPort->topTermName));
-  ASSERT_NE(nullptr, promoted);
-  ASSERT_NE(nullptr, promoted->getNet());
-  EXPECT_FALSE(promoted->getNet()->isConstant());
-
-  ASSERT_EQ(1u, boundary.getTop()->getInstances().size());
-  auto* bridge = *boundary.getTop()->getInstances().begin();
-  ASSERT_TRUE(NLDB0::isAssign(bridge->getModel()));
-  auto* bridgeInput = bridge->getInstTerm(NLDB0::getAssignInput());
-  auto* bridgeOutput = bridge->getInstTerm(NLDB0::getAssignOutput());
-  ASSERT_NE(nullptr, bridgeInput->getNet());
-  EXPECT_TRUE(bridgeInput->getNet()->isConstant());
-  EXPECT_EQ(promoted->getNet(), bridgeOutput->getNet());
-
-  // The source remains unchanged, including its direct constant connection.
-  EXPECT_EQ(constant, instance->getInstTerm(
-                          block->getScalarTerm(NLName("A")))->getNet());
+  universe_->setTopDesign(top);
+  LogicalBoundary boundary(*naja::DNL::get(), {{"u", "u"}}, 0);
+  ASSERT_EQ(1u, boundary.getOutputs().size());
+  EXPECT_TRUE(boundary.getSignal(boundary.getOutputs().front()).isConstant0());
+  ASSERT_EQ(1u, boundary.getInputs().size());
+  const auto& signal = boundary.getSignal(boundary.getInputs().front());
+  ASSERT_EQ(1u, signal.getDrivers().size());
+  EXPECT_EQ(boundary.getInputs().front(), signal.getDrivers().front());
+  EXPECT_EQ(nullptr, instance->getInstTerm(block->getScalarTerm(NLName("Y")))->getNet());
+  EXPECT_EQ(1u, top->getInstances().size());
+  EXPECT_EQ(1u, top->getNets().size());
+  EXPECT_EQ(0u, top->getTerms().size());
 }
 
 TEST_F(DesignBoundaryTests, RejectsAliasedOrMultiplyDrivenOutputs) {
@@ -357,7 +256,7 @@ TEST_F(DesignBoundaryTests, RejectsAliasedOrMultiplyDrivenOutputs) {
   instance->getInstTerm(block->getScalarTerm(NLName("Z")))->setNet(output);
 
   EXPECT_THROW(
-      BoundaryDesign(top, {{"u", "u"}}, 0), std::invalid_argument);
+      BoundarySelection(top, {{"u", "u"}}, 0), std::invalid_argument);
   EXPECT_NE(nullptr, top->getInstance(NLName("u")));
 }
 
@@ -369,14 +268,14 @@ TEST_F(DesignBoundaryTests, RejectsInvalidDuplicateAndNestedPaths) {
   SNLInstance::create(top, wrapper, NLName("wrap"));
 
   EXPECT_THROW(
-      BoundaryDesign(top, {{"missing", "missing"}}, 0),
+      BoundarySelection(top, {{"missing", "missing"}}, 0),
       std::invalid_argument);
   EXPECT_THROW(
-      BoundaryDesign(
+      BoundarySelection(
           top, {{"wrap/leaf", "wrap/leaf"}, {"wrap/leaf", "wrap/leaf"}}, 0),
       std::invalid_argument);
   EXPECT_THROW(
-      BoundaryDesign(
+      BoundarySelection(
           top, {{"wrap", "wrap"}, {"wrap/leaf", "wrap/leaf"}}, 0),
       std::invalid_argument);
 }
@@ -386,13 +285,13 @@ TEST_F(DesignBoundaryTests, RejectsUnconnectedInputAndPinlessInstance) {
   auto* top = SNLDesign::create(designs_, NLName("top"));
   SNLInstance::create(top, block, NLName("u"));
   EXPECT_THROW(
-      BoundaryDesign(top, {{"u", "u"}}, 0), std::invalid_argument);
+      BoundarySelection(top, {{"u", "u"}}, 0), std::invalid_argument);
 
   auto* empty = createScalarBlock("EMPTY", {}, {});
   auto* emptyTop = SNLDesign::create(designs_, NLName("empty_top"));
   SNLInstance::create(emptyTop, empty, NLName("u"));
   EXPECT_THROW(
-      BoundaryDesign(emptyTop, {{"u", "u"}}, 0), std::invalid_argument);
+      BoundarySelection(emptyTop, {{"u", "u"}}, 0), std::invalid_argument);
 }
 
 TEST_F(DesignBoundaryTests, RejectsBoundaryInputWithoutADriver) {
@@ -403,7 +302,7 @@ TEST_F(DesignBoundaryTests, RejectsBoundaryInputWithoutADriver) {
   instance->getInstTerm(block->getScalarTerm(NLName("A")))->setNet(undriven);
 
   EXPECT_THROW(
-      BoundaryDesign(top, {{"u", "u"}}, 0), std::invalid_argument);
+      BoundarySelection(top, {{"u", "u"}}, 0), std::invalid_argument);
   EXPECT_NE(nullptr, top->getInstance(NLName("u")));
 }
 
@@ -420,7 +319,7 @@ TEST_F(DesignBoundaryTests, RejectsMultiplyDrivenBoundaryInput) {
       ->setNet(multiplyDriven);
 
   EXPECT_THROW(
-      BoundaryDesign(top, {{"u", "u"}}, 0), std::invalid_argument);
+      BoundarySelection(top, {{"u", "u"}}, 0), std::invalid_argument);
   EXPECT_NE(nullptr, top->getInstance(NLName("u")));
 }
 
@@ -471,7 +370,7 @@ void expectInvalidBoundary(SNLDesign* top,
                            size_t side,
                            const std::string& diagnostic) {
   try {
-    BoundaryDesign boundary(top, pairs, side);
+    BoundarySelection boundary(top, pairs, side);
     FAIL() << "Expected boundary validation failure: " << diagnostic;
   } catch (const std::invalid_argument& error) {
     EXPECT_NE(std::string::npos, std::string(error.what()).find(diagnostic))
@@ -516,34 +415,6 @@ TEST_F(DesignBoundaryTests, RejectsMalformedPathsAndReportsMissingAncestor) {
   EXPECT_NE(nullptr, wrapper->getInstance(NLName("leaf")));
 }
 
-TEST_F(DesignBoundaryTests, PromotesNegativeBusIndicesWithoutNameCollisions) {
-  auto* block = SNLDesign::create(
-      primitives_, SNLDesign::Type::Primitive, NLName("NEGATIVE_BUS"));
-  SNLBusTerm::create(block, SNLTerm::Direction::Output, -1, 1, NLName("Y"));
-  auto* top = SNLDesign::create(designs_, NLName("top"));
-  SNLInstance::create(top, block, NLName("u"));
-
-  BoundaryDesign boundary(top, {{"unused_on_left", "u"}}, 1);
-  ASSERT_EQ(3u, boundary.getPorts().size());
-  for (int bit : {-1, 0, 1}) {
-    const auto* port = findPort(boundary, 0, "Y", bit);
-    ASSERT_NE(nullptr, port);
-    EXPECT_EQ(3u, port->width);
-    EXPECT_EQ(-1, port->msb);
-    EXPECT_EQ(1, port->lsb);
-    EXPECT_FALSE(port->isInput);
-    auto* promoted = boundary.getTop()->getScalarTerm(NLName(port->topTermName));
-    ASSERT_NE(nullptr, promoted);
-    EXPECT_EQ(SNLTerm::Direction::Input, promoted->getDirection());
-    EXPECT_NE(nullptr, promoted->getNet());
-  }
-  EXPECT_EQ("__kepler_boundary_p0_n59_bn1",
-            findPort(boundary, 0, "Y", -1)->topTermName);
-  EXPECT_EQ("__kepler_boundary_p0_n59_bp1",
-            findPort(boundary, 0, "Y", 1)->topTermName);
-  EXPECT_NE(nullptr, top->getInstance(NLName("u")));
-}
-
 TEST_F(DesignBoundaryTests, RejectsConstantDrivenBoundaryOutput) {
   auto* block = createScalarBlock("BLOCK", {}, {"Y"});
   auto* top = SNLDesign::create(designs_, NLName("top"));
@@ -555,6 +426,16 @@ TEST_F(DesignBoundaryTests, RejectsConstantDrivenBoundaryOutput) {
   expectInvalidBoundary(top, {{"u", "u"}}, 0, "connected to a constant net");
   EXPECT_EQ(constant, instance->getInstTerm(
                           block->getScalarTerm(NLName("Y")))->getNet());
+}
+
+TEST_F(DesignBoundaryTests, RejectsVirtualOutputDisplayNameCollision) {
+  auto* block = createScalarBlock("BLOCK", {}, {"Y"});
+  auto* top = SNLDesign::create(designs_, NLName("top"));
+  SNLInstance::create(top, block, NLName("u"));
+  const auto name = BoundarySelection(top, {{"u", "u"}}, 0)
+                        .getPorts().front().topTermName;
+  SNLScalarTerm::create(top, SNLTerm::Direction::Output, NLName(name));
+  expectInvalidBoundary(top, {{"u", "u"}}, 0, "collides with existing term");
 }
 
 TEST_F(DesignBoundaryTests, RejectsUnnamedAndUnsupportedDirectionPins) {
@@ -592,75 +473,6 @@ TEST_F(DesignBoundaryTests, RejectsScalarAndBusBundleMembers) {
     expectInvalidBoundary(top, {{"u", "u"}}, 0, "bundled boundary pins");
     EXPECT_NE(nullptr, top->getInstance(NLName("u")));
   }
-}
-
-TEST_F(DesignBoundaryTests, RejectsTopAndAncestorSyntheticTermCollisions) {
-  auto* block = createScalarBlock("BLOCK", {}, {"Y"});
-  const NLName syntheticName("__kepler_boundary_p0_n59_bp0");
-  auto* directTop = SNLDesign::create(designs_, NLName("direct_top"));
-  SNLInstance::create(directTop, block, NLName("u"));
-  SNLScalarTerm::create(directTop, SNLTerm::Direction::Input, syntheticName);
-  const size_t libraryCount = db_->getGlobalLibraries().size();
-  expectInvalidBoundary(
-      directTop, {{"u", "u"}}, 0, "top term collides with existing term");
-
-  auto* wrapper = SNLDesign::create(designs_, NLName("wrapper"));
-  SNLInstance::create(wrapper, block, NLName("leaf"));
-  SNLScalarTerm::create(wrapper, SNLTerm::Direction::Input, syntheticName);
-  auto* nestedTop = SNLDesign::create(designs_, NLName("nested_top"));
-  SNLInstance::create(nestedTop, wrapper, NLName("wrap"));
-  expectInvalidBoundary(
-      nestedTop, {{"wrap/leaf", "wrap/leaf"}}, 0, "collides in ancestor model");
-
-  EXPECT_EQ(libraryCount, db_->getGlobalLibraries().size());
-  EXPECT_NE(nullptr, directTop->getInstance(NLName("u")));
-  EXPECT_NE(nullptr, wrapper->getInstance(NLName("leaf")));
-}
-
-TEST_F(DesignBoundaryTests, MovesTransferScratchOwnershipAndRejectStaleAccess) {
-  auto* block = createScalarBlock("BLOCK", {}, {"Y"});
-  auto* top = SNLDesign::create(designs_, NLName("top"));
-  SNLInstance::create(top, block, NLName("u"));
-  const size_t libraryCount = db_->getGlobalLibraries().size();
-  {
-    BoundaryDesign source(top, {{"u", "u"}}, 0);
-    auto* scratchTop = source.getTop();
-    const auto portName = source.getPorts().front().topTermName;
-    BoundaryDesign moved(std::move(source));
-    EXPECT_EQ(nullptr, source.getTop());
-    EXPECT_THROW(source.getPorts(), std::logic_error);
-    EXPECT_EQ(scratchTop, moved.getTop());
-    EXPECT_EQ(portName, moved.getPorts().front().topTermName);
-
-    BoundaryDesign destination(top, {{"u", "u"}}, 0);
-    EXPECT_EQ(libraryCount + 2, db_->getGlobalLibraries().size());
-    destination = std::move(moved);
-    EXPECT_EQ(nullptr, moved.getTop());
-    EXPECT_THROW(moved.getPorts(), std::logic_error);
-    EXPECT_EQ(scratchTop, destination.getTop());
-    EXPECT_EQ(portName, destination.getPorts().front().topTermName);
-    EXPECT_EQ(libraryCount + 1, db_->getGlobalLibraries().size());
-  }
-  EXPECT_EQ(libraryCount, db_->getGlobalLibraries().size());
-  EXPECT_NE(nullptr, top->getInstance(NLName("u")));
-}
-
-TEST_F(DesignBoundaryTests, RestoresPreviousUniverseTopAcrossDatabases) {
-  auto* otherDB = NLDB::create(universe_);
-  auto* otherLibrary = NLLibrary::create(otherDB, NLName("other"));
-  auto* otherTop = SNLDesign::create(otherLibrary, NLName("other_top"));
-  universe_->setTopDesign(otherTop);
-  auto* top = SNLDesign::create(designs_, NLName("top"));
-  db_->setTopDesign(top);
-
-  {
-    BoundaryDesign boundary(top, {}, 0);
-    universe_->setTopDesign(boundary.getTop());
-    ASSERT_EQ(db_, universe_->getTopDB());
-  }
-  EXPECT_EQ(top, db_->getTopDesign());
-  EXPECT_EQ(otherDB, universe_->getTopDB());
-  EXPECT_EQ(otherTop, universe_->getTopDesign());
 }
 
 TEST_F(DesignBoundaryTests, RejectsMissingKeysSyntheticNamesAndRightDuplicates) {

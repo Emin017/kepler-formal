@@ -24,10 +24,6 @@ namespace {
 
 using namespace naja::NL;
 
-struct DestroyBoundaryDnl {
-  ~DestroyBoundaryDnl() { naja::DNL::destroy(); }
-};
-
 class BoundaryEquivalenceTests
     : public ::testing::TestWithParam<std::tuple<SecEngine, SecEncoding>> {
  protected:
@@ -105,19 +101,16 @@ class BoundaryEquivalenceTests
   SequentialEquivalenceResult prove(SNLDesign* left, SNLDesign* right,
                                     BoundaryPairs pairs,
                                     bool registered = false) {
-    BoundaryDesign first(left, pairs, 0);
-    BoundaryDesign second(right, pairs, 1);
-    DestroyBoundaryDnl cleanup;
-    validateBoundaryInterfaces(first.getPorts(), second.getPorts());
     SecResetSpec reset;
     if (registered) {
       reset.cycles = 1;
       reset.ports.push_back({"rst", true});
     }
-    return SequentialEquivalenceStrategy(
-               first.getTop(), second.getTop(), Config::SolverType::KISSAT,
-               std::get<0>(GetParam()), std::get<1>(GetParam()), reset)
-        .run(4);
+    SequentialEquivalenceStrategy strategy(
+        left, right, Config::SolverType::KISSAT,
+        std::get<0>(GetParam()), std::get<1>(GetParam()), reset);
+    strategy.setBoundaryPairs(pairs);
+    return strategy.run(4);
   }
 
   SNLDesign* sequentialBlock(const char* name, bool invertClock = false) {
@@ -158,6 +151,18 @@ class BoundaryEquivalenceTests
       block->getInstTerm(opaque_->getScalarTerm(NLName("A")))->setNet(a);
       block->getInstTerm(opaque_->getScalarTerm(NLName("Y")))
           ->setNet((index == 0) != swapOutputs ? y0 : y1);
+    }
+    return top;
+  }
+
+  SNLDesign* nestedWrapper(const char* name, const char* innerName,
+                           bool invertInput = false, bool registered = false) {
+    auto* inner = wrapper(innerName, "macro", invertInput, false, registered);
+    auto* top = SNLDesign::create(designs_, NLName(name));
+    auto* instance = SNLInstance::create(top, inner, NLName("wrapper"));
+    for (auto* term : inner->getScalarTerms()) {
+      auto* net = port(top, term->getName().getString().c_str(), term->getDirection());
+      instance->getInstTerm(term)->setNet(net);
     }
     return top;
   }
@@ -234,7 +239,7 @@ TEST_P(BoundaryEquivalenceTests, DifferentConstantBoundaryInputsFail) {
   EXPECT_EQ(result.totalOutputs, 2u);
 }
 
-TEST_P(BoundaryEquivalenceTests, ModelledAndOpaqueInternalsAreBothRemoved) {
+TEST_P(BoundaryEquivalenceTests, ModelledAndOpaqueInternalsAreBothExcluded) {
   const auto result = prove(wrapper("left", "rtl", false, false, false, inverter_),
                             wrapper("right", "gate"), {{"rtl", "gate"}});
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
@@ -270,25 +275,42 @@ TEST_P(BoundaryEquivalenceTests, SequentialMutationAfterBoundaryFails) {
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
 }
 
-TEST_P(BoundaryEquivalenceTests, ExtractedModelsSurviveBoundaryDestruction) {
+TEST_P(BoundaryEquivalenceTests, SharedBoundaryOutputCanClockAnOutsideRegister) {
+  auto* left = wrapper("left", "macro", false, false, true);
+  auto* right = wrapper("right", "macro", false, false, true);
+  auto* reference = ordinaryRegisteredInterface("external_left");
+  auto* implementation = ordinaryRegisteredInterface("external_right");
+  for (auto* top : {left, right, reference, implementation}) {
+    auto* ff = top->getInstance(NLName("ff"));
+    ff->getInstTerm(NLDB0::getDFFRClock())
+        ->setNet(ff->getInstTerm(NLDB0::getDFFRData())->getNet());
+    ff->getInstTerm(NLDB0::getDFFRData())
+        ->setNet(top->getScalarTerm(NLName("a"))->getNet());
+  }
+  for (auto* top : {reference, implementation}) {
+    top->getScalarTerm(NLName("external_data"))->setName(NLName("external_clk"));
+  }
+  const auto result = prove(left, right, {{"macro", "macro"}}, true);
+  const auto baseline = prove(reference, implementation, {}, true);
+  EXPECT_EQ(result.status, baseline.status) << result.reason;
+  EXPECT_EQ(result.coveredOutputs, baseline.coveredOutputs);
+  EXPECT_EQ(result.totalOutputs, 2u);
+  EXPECT_TRUE(result.opaqueCellSkippedOutputs.empty());
+  if (std::get<0>(GetParam()) != SecEngine::Imc) {
+    EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
+    EXPECT_EQ(result.coveredOutputs, 2u);
+  }
+}
+
+TEST_P(BoundaryEquivalenceTests, ExtractedModelsSurviveNetlistDestruction) {
   auto* left = wrapper("left", "macro");
   auto* right = wrapper("right", "other");
   const BoundaryPairs pairs{{"macro", "other"}};
-  SequentialDesignModel first;
-  SequentialDesignModel second;
-  std::vector<BoundaryPort> firstPorts;
-  {
-    BoundaryDesign boundary(left, pairs, 0);
-    DestroyBoundaryDnl cleanup;
-    firstPorts = boundary.getPorts();
-    first = SequentialDesignModel::extract(boundary.getTop());
-  }
-  {
-    BoundaryDesign boundary(right, pairs, 1);
-    DestroyBoundaryDnl cleanup;
-    validateBoundaryInterfaces(firstPorts, boundary.getPorts());
-    second = SequentialDesignModel::extract(boundary.getTop());
-  }
+  const auto first = SequentialDesignModel::extract(left, pairs, 0);
+  const auto second = SequentialDesignModel::extract(right, pairs, 1);
+  left->getDB()->setTopDesign(nullptr);
+  left->destroy();
+  right->destroy();
   const auto result = SequentialEquivalenceStrategy(
                           nullptr, nullptr, Config::SolverType::KISSAT,
                           std::get<0>(GetParam()), std::get<1>(GetParam()))
@@ -322,6 +344,89 @@ TEST_P(BoundaryEquivalenceTests, DifferentPairsHaveIndependentSharedInputs) {
   const auto result = prove(twoBlocks("left", false), twoBlocks("right", true),
                             {{"block0", "block0"}, {"block1", "block1"}});
   EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
+}
+
+TEST_P(BoundaryEquivalenceTests, NestedBoundaryDoesNotModifyTheHierarchy) {
+  auto* left = nestedWrapper("left", "inner_left");
+  auto* right = nestedWrapper("right", "inner_right");
+  auto* wrapperInstance = left->getInstance(NLName("wrapper"));
+  auto* inner = wrapperInstance->getModel();
+  auto* block = inner->getInstance(NLName("macro"));
+  auto* inputNet = block->getInstTerm(opaque_->getScalarTerm(NLName("A")))->getNet();
+  const auto result = prove(left, right, {{"wrapper/macro", "wrapper/macro"}});
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
+  EXPECT_EQ(result.coveredOutputs, 2u);
+  EXPECT_EQ(wrapperInstance->getModel(), inner);
+  EXPECT_EQ(inner->getInstance(NLName("macro")), block);
+  EXPECT_EQ(block->getInstTerm(opaque_->getScalarTerm(NLName("A")))->getNet(), inputNet);
+  EXPECT_EQ(left->getTerms().size(), 4u);
+  EXPECT_EQ(inner->getTerms().size(), 4u);
+}
+
+TEST_P(BoundaryEquivalenceTests, NestedBoundaryInputMutationIsDetected) {
+  const auto result = prove(nestedWrapper("left", "inner_left"),
+                            nestedWrapper("right", "inner_right", true),
+                            {{"wrapper/macro", "wrapper/macro"}});
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Different) << result.reason;
+}
+
+TEST_P(BoundaryEquivalenceTests, SelectedHierarchyExcludesOpaqueAndStatefulDescendants) {
+  const auto result = prove(nestedWrapper("left", "inner_left", false, true),
+                            nestedWrapper("right", "inner_right", false, true),
+                            {{"wrapper", "wrapper"}});
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
+  EXPECT_EQ(result.coveredOutputs, 4u);
+  EXPECT_TRUE(result.opaqueCellSkippedOutputs.empty());
+}
+
+TEST_P(BoundaryEquivalenceTests, InternalFeedthroughDoesNotAliasBoundaryPorts) {
+  auto* feedthrough = SNLDesign::create(designs_, NLName("feedthrough"));
+  auto* input = port(feedthrough, "A", SNLTerm::Direction::Input);
+  SNLScalarTerm::create(feedthrough, SNLTerm::Direction::Output, NLName("Y"))
+      ->setNet(input);
+  const auto result = prove(wrapper("left", "macro", false, false, false, feedthrough),
+                            wrapper("right", "macro"), {{"macro", "macro"}});
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
+  EXPECT_EQ(result.coveredOutputs, 2u);
+}
+
+TEST_P(BoundaryEquivalenceTests, InternalConstantsDoNotConstrainSharedInputs) {
+  auto* block = SNLDesign::create(designs_, NLName("constant_block"));
+  port(block, "A", SNLTerm::Direction::Input);
+  port(block, "Y", SNLTerm::Direction::Output)->setType(SNLNet::Type::Assign0);
+  const auto result = prove(wrapper("left", "macro", false, false, false, block),
+                            wrapper("right", "macro"), {{"macro", "macro"}});
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent) << result.reason;
+  EXPECT_EQ(result.coveredOutputs, 2u);
+}
+
+TEST_P(BoundaryEquivalenceTests, SelectedStateIsNotCollectedOrClockClassified) {
+  auto* left = sequentialBlock("left");
+  const auto model = SequentialDesignModel::extract(left, {{"block", "block"}}, 0);
+  EXPECT_FALSE(model.hasUnsupportedFeatures());
+  EXPECT_TRUE(model.stateBits.empty());
+  EXPECT_TRUE(model.nextStateExprByStateKey.empty());
+  EXPECT_EQ(model.environmentInputs.size(), 4u);
+  EXPECT_EQ(model.observedOutputs.size(), 4u);
+}
+
+TEST_P(BoundaryEquivalenceTests, OpaqueLogicOutsideTheBoundaryIsStillReported) {
+  auto* left = wrapper("left", "macro");
+  auto* right = wrapper("right", "macro");
+  for (auto* top : {left, right}) {
+    auto* upstream = SNLInstance::create(top, opaque_, NLName("upstream"));
+    upstream->getInstTerm(opaque_->getScalarTerm(NLName("A")))
+        ->setNet(top->getScalarTerm(NLName("a"))->getNet());
+    auto* unknown = SNLScalarNet::create(top, NLName("unknown"));
+    upstream->getInstTerm(opaque_->getScalarTerm(NLName("Y")))->setNet(unknown);
+    top->getInstance(NLName("macro"))
+        ->getInstTerm(opaque_->getScalarTerm(NLName("A")))->setNet(unknown);
+  }
+  const auto result = prove(left, right, {{"macro", "macro"}});
+  EXPECT_EQ(result.status, SequentialEquivalenceStatus::PartiallyProved) << result.reason;
+  EXPECT_EQ(result.coveredOutputs, 1u);
+  EXPECT_EQ(result.totalOutputs, 2u);
+  EXPECT_EQ(result.opaqueCellSkippedOutputs.size(), 1u);
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -2438,11 +2438,6 @@ static int KeplerFormalMainImpl(
   // --------------------------------------------------------------------------
   naja::NL::SNLDesign* top0 = nullptr;
   naja::NL::SNLDesign* top1 = nullptr;
-  std::unique_ptr<KEPLER_FORMAL::BoundaryDesign> boundaryDesign0;
-  std::unique_ptr<KEPLER_FORMAL::BoundaryDesign> boundaryDesign1;
-  struct DnlCleanupBeforeBoundary {
-    ~DnlCleanupBeforeBoundary() { naja::DNL::destroy(); }
-  } boundaryDnlCleanup;
   try {
     NLUniverse::create();
     NLDB* db0 = nullptr;
@@ -2628,12 +2623,17 @@ static int KeplerFormalMainImpl(
         // LCOV_EXCL_START
         [&](naja::NL::SNLDesign* top,
         // LCOV_EXCL_STOP
-            const char* designLabel) {
+            const char* designLabel, size_t side,
+            std::vector<KEPLER_FORMAL::BoundaryPort>& boundaryPorts) {
           // LCOV_EXCL_START
           KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
+          builder.setBoundaryPairs(boundaryPairs, side);
           NLUniverse::get()->setTopDesign(top);
           naja::DNL::destroy();
           builder.collect();
+          if (const auto* boundary = builder.getLogicalBoundary()) {
+            boundaryPorts = boundary->getPorts();
+          }
           SPDLOG_INFO("Collected {} PIs for {}", builder.getInputs().size(), designLabel);
           SPDLOG_INFO("Collected {} POs for {}", builder.getOutputs().size(), designLabel);
           std::vector<KEPLER_FORMAL::BuildPrimaryOutputClauses::PathKey>
@@ -2650,74 +2650,26 @@ static int KeplerFormalMainImpl(
         };
         // LCOV_EXCL_STOP
 
-    auto releaseCompactDb = [](
-        NLDB*& db,
-        std::unique_ptr<KEPLER_FORMAL::BoundaryDesign>& boundaryDesign) {
-      naja::DNL::destroy();
-      if (auto* universe = NLUniverse::get()) {
-        // Compact mode deliberately releases each elaborated DB before the
-        // next one is loaded. Clear the universe top first so it never points
-        // into a released database.
-        universe->setTopDB(nullptr);
-      }
-      boundaryDesign.reset();
-      if (db != nullptr) {
-        db->destroy();
-        db = nullptr;
-      }
-    };
-
-    auto extractCompactLecSnapshot =
-        [&](const std::vector<std::string>& designPaths,
-            const SystemVerilogDesignOptions& designOptions,
-            int designIndex,
-            int dbID,
-            const char* designLabel) {
-          NLDB* db =
-              loadOneDesign(designPaths, designOptions, designIndex, dbID);
-          std::unique_ptr<KEPLER_FORMAL::BoundaryDesign> boundaryDesign;
-          DnlCleanupBeforeBoundary dnlCleanup;
-          try {
-            auto* top = db->getTopDesign();
-            if (top == nullptr) {
-              throw std::runtime_error(
-                  std::string("Top design not set for ") + designLabel);
-            }
-            std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts;
-            if (!boundaryPairs.empty()) {
-              boundaryDesign =
-                  std::make_unique<KEPLER_FORMAL::BoundaryDesign>(
-                      top, boundaryPairs, static_cast<size_t>(designIndex));
-              top = boundaryDesign->getTop();
-              boundaryPorts = boundaryDesign->getPorts();
-            }
-            auto snapshot = buildCompactSnapshotForTop(top, designLabel);
-            releaseCompactDb(db, boundaryDesign);
-            return std::make_pair(
-                std::move(snapshot), std::move(boundaryPorts));
-          } catch (...) {
-            releaseCompactDb(db, boundaryDesign);
-            throw;
-          }
-        };
-
     if (compactMode && verificationMode == VerificationMode::LEC && !useScopes) {
       // LCOV_EXCL_START
-      auto [snapshot0, boundaryPorts0] = extractCompactLecSnapshot(
-          designInputs.design0,
-          systemVerilogOptions.design0,
-          0,
-          2,
-          "design 1");
+      std::vector<KEPLER_FORMAL::BoundaryPort> boundaryPorts0, boundaryPorts1;
+      NLDB* compactDb0 =
+          loadOneDesign(designInputs.design0, systemVerilogOptions.design0, 0, 2);
+      top0 = compactDb0->getTopDesign();
+      auto snapshot0 = buildCompactSnapshotForTop(top0, "design 0", 0, boundaryPorts0);
+      naja::DNL::destroy();
+      compactDb0->destroy();
+      top0 = nullptr;
       // LCOV_EXCL_STOP
 
       // LCOV_EXCL_START
-      auto [snapshot1, boundaryPorts1] = extractCompactLecSnapshot(
-          designInputs.design1,
-          systemVerilogOptions.design1,
-          1,
-          1,
-          "design 2");
+      NLDB* compactDb1 =
+          loadOneDesign(designInputs.design1, systemVerilogOptions.design1, 1, 1);
+      top1 = compactDb1->getTopDesign();
+      auto snapshot1 = buildCompactSnapshotForTop(top1, "design 1", 1, boundaryPorts1);
+      naja::DNL::destroy();
+      compactDb1->destroy();
+      top1 = nullptr;
       if (!boundaryPairs.empty()) {
         KEPLER_FORMAL::validateBoundaryInterfaces(
             boundaryPorts0, boundaryPorts1);
@@ -2763,6 +2715,20 @@ static int KeplerFormalMainImpl(
     // LCOV_EXCL_STOP
 
     if (compactMode && verificationMode == VerificationMode::SEC) {
+      auto releaseCompactDb = [](NLDB* db) {
+        naja::DNL::destroy();
+        if (auto* universe = NLUniverse::get()) {
+          // Sequential extraction restores the current top when possible. In
+          // compact mode we deliberately drop that elaborated DB before loading
+          // the next design, so clear the universe top DB first to avoid a
+          // dangling top pointer.
+          universe->setTopDB(nullptr);
+        }
+        if (db != nullptr) {
+          db->destroy();
+        }
+      };
+
       auto extractCompactSecModel =
           [&](const std::vector<std::string>& designPaths,
               const SystemVerilogDesignOptions& designOptions,
@@ -2772,8 +2738,6 @@ static int KeplerFormalMainImpl(
               std::vector<KEPLER_FORMAL::BoundaryPort>& boundaryPorts) {
             NLDB* db =
                 loadOneDesign(designPaths, designOptions, designIndex, dbID);
-            std::unique_ptr<KEPLER_FORMAL::BoundaryDesign> boundaryDesign;
-            DnlCleanupBeforeBoundary dnlCleanup;
             try {
               auto* top = db->getTopDesign();
               if (top == nullptr) {
@@ -2785,19 +2749,17 @@ static int KeplerFormalMainImpl(
                 // LCOV_EXCL_STOP
               }
               if (!boundaryPairs.empty()) {
-                boundaryDesign =
-                    std::make_unique<KEPLER_FORMAL::BoundaryDesign>(
-                        top, boundaryPairs, static_cast<size_t>(designIndex));
-                top = boundaryDesign->getTop();
-                boundaryPorts = boundaryDesign->getPorts();
+                boundaryPorts = KEPLER_FORMAL::BoundarySelection(
+                    top, boundaryPairs, static_cast<size_t>(designIndex)).getPorts();
               }
-              auto model = KEPLER_FORMAL::SEC::SequentialDesignModel::extract(top);
-              releaseCompactDb(db, boundaryDesign);
+              auto model = KEPLER_FORMAL::SEC::SequentialDesignModel::extract(
+                  top, boundaryPairs, static_cast<size_t>(designIndex));
+              releaseCompactDb(db);
               return model;
             } catch (...) {
               // LCOV_EXCL_START
               // LCOV_DISABLED_START
-              releaseCompactDb(db, boundaryDesign);
+              releaseCompactDb(db);
               throw;
               // LCOV_DISABLED_STOP
               // LCOV_EXCL_STOP
@@ -3107,18 +3069,6 @@ static int KeplerFormalMainImpl(
       // LCOV_DISABLED_STOP
       // LCOV_EXCL_STOP
     }
-    if (!boundaryPairs.empty()) {
-      boundaryDesign0 =
-          std::make_unique<KEPLER_FORMAL::BoundaryDesign>(
-              top0, boundaryPairs, 0);
-      boundaryDesign1 =
-          std::make_unique<KEPLER_FORMAL::BoundaryDesign>(
-              top1, boundaryPairs, 1);
-      KEPLER_FORMAL::validateBoundaryInterfaces(
-          boundaryDesign0->getPorts(), boundaryDesign1->getPorts());
-      top0 = boundaryDesign0->getTop();
-      top1 = boundaryDesign1->getTop();
-    }
   // LCOV_EXCL_START
   } catch (const std::exception& e) {
     SPDLOG_CRITICAL("Netlist loading failed: {}", e.what());
@@ -3142,6 +3092,7 @@ static int KeplerFormalMainImpl(
           secEncoding,
           secResetSpec,
           btor2ExportConfig.options());
+      strategy.setBoundaryPairs(boundaryPairs);
       return emitSecResult(strategy.run(secMaxK));
       // LCOV_EXCL_STOP
     // LCOV_EXCL_START
@@ -3231,6 +3182,7 @@ static int KeplerFormalMainImpl(
       // LCOV_EXCL_START
       KEPLER_FORMAL::MiterStrategy MiterS(top0, top1, logFileName);
       MiterS.setAllowBoundaryMismatch(allowBoundaryMismatch);
+      MiterS.setBoundaryPairs(boundaryPairs);
       if (dumpCnf) {
         const std::string outPath = dumpCnfPath.empty() ? "miter.cnf" : dumpCnfPath;
         MiterS.setCnfDump(true, outPath);
