@@ -74,9 +74,20 @@ Options and results
 
 ``VerificationOptions`` selects ``VerificationMode``, ``Solver``, ``SecEngine``,
 and ``SecEncoding`` and provides ``max_k``, ``allow_boundary_mismatch``,
-``report_skipped_outputs``, ``log_file``, and ``log_level``. Enum fields accept
-their exact string values. SEC engine, encoding, and bound options require SEC;
-boundary-mismatch handling requires LEC.
+``report_skipped_outputs``, ``log_file``, ``log_level``, and
+``set_as_boundary``. Enum fields accept their exact string values. SEC engine,
+encoding, and bound options require SEC; boundary-mismatch handling requires
+LEC.
+
+``set_as_boundary`` accepts ordered pairs of slash-separated instance paths,
+one path relative to each supplied top design. Only leaf instances, whose models
+have no child instances, may be selected. Hierarchical paths to leaves are
+supported; nonleaf selections are rejected. For every selected instance,
+its inputs become additional compared outputs and its outputs become shared
+unconstrained inputs. Corresponding pin interfaces must match. These logical
+verification boundaries work for both LEC and SEC without cloning or rewiring
+the designs; the original designs and any caller-owned DNL remain reusable
+after the call.
 
 Use ``result.status`` for the verdict: the historical native ``exit_code`` is
 not mode-independent, and LEC returns zero for both equivalent and different

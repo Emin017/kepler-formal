@@ -256,6 +256,7 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
     if (options.mode == BorrowedVerificationMode::SEC) {
       SEC::SequentialEquivalenceStrategy strategy(
           design0, design1, options.solver, options.secEngine, options.secEncoding);
+      strategy.setBoundaryPairs(options.setAsBoundary);
       const auto proof = strategy.run(options.maxK);
       assignSecResult(proof, result);
       if (options.reportSkippedOutputs) {
@@ -276,6 +277,7 @@ int verifyBorrowedDesigns(naja::NL::SNLDesign* design0,
     } else {
       MiterStrategy strategy(design0, design1, options.logFile);
       strategy.setAllowBoundaryMismatch(options.allowBoundaryMismatch);
+      strategy.setBoundaryPairs(options.setAsBoundary);
       strategy.init();
       result.logFile = MiterStrategy::getActualLogFileName();
       result.status = strategy.run(false) ? RunStatus::Equivalent : RunStatus::Different;

@@ -151,7 +151,8 @@ std::optional<naja::DNL::DNLID> getClockTreeBufferSourceDriverTerm(
 
 bool hasBuildableCombinationalRoot(
     naja::DNL::DNLFull* dnl,
-    naja::DNL::DNLID requestedTermID) {
+    naja::DNL::DNLID requestedTermID,
+    const LeafBoundary* boundary) {
   if (dnl == nullptr || requestedTermID == naja::DNL::DNLID_MAX) {
     // LCOV_EXCL_START
     return false;  // LCOV_EXCL_LINE
@@ -163,6 +164,9 @@ bool hasBuildableCombinationalRoot(
   while (currentTermID != naja::DNL::DNLID_MAX &&
          visitedTerms.insert(currentTermID).second) {
     const auto& currentTerm = dnl->getDNLTerminalFromID(currentTermID);
+    if (boundary && boundary->isInput(currentTermID)) {
+      return true;
+    }
     if (currentTerm.isNull()) {
       // LCOV_EXCL_START
       return false;  // LCOV_EXCL_LINE
@@ -676,11 +680,13 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
         collectedSkippedOutputs,
     bool secDiagEnabled,
     const char* topName,
-    const char* phaseLabel) {
+    const char* phaseLabel,
+    const LeafBoundary* boundary) {
   MaterializedBuilderOutputs result;
 
   KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
   builder.setRetainDnl(true);
+  builder.setLeafBoundary(boundary);
   builder.setStopAtOpaqueInternalOutputs(true);
   std::vector<naja::DNL::DNLID> normalizedRoots;
   normalizedRoots.reserve(requestedOutputs.size());
@@ -707,6 +713,9 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
     while (currentTermID != naja::DNL::DNLID_MAX &&
            visitedTerms.insert(currentTermID).second) {
       const auto& currentTerm = dnl->getDNLTerminalFromID(currentTermID);
+      if (boundary && boundary->isInput(currentTermID)) {
+        return currentTermID;
+      }
       if (currentTerm.isNull()) {
         // LCOV_EXCL_START
         return std::nullopt;  // LCOV_EXCL_LINE
@@ -800,7 +809,8 @@ MaterializedBuilderOutputs materializeBuilderOutputs(
     if (!(rootTerm.isTopPort() &&
           rootTerm.getSnlBitTerm()->getDirection() !=
               naja::NL::SNLBitTerm::Direction::Output) &&
-        hasBuildableCombinationalRoot(dnl, *rootTermID)) {
+        !(boundary && boundary->isInput(*rootTermID)) &&
+        hasBuildableCombinationalRoot(dnl, *rootTermID, boundary)) {
       nonTopRootsToBuild.insert(*rootTermID);
     }
     requestedByRoot[*rootTermID].push_back(requestedTermID);
@@ -2042,7 +2052,8 @@ size_t expandClockCarrierVarIDsFromBoundaryNames(
 size_t expandClockCarrierVarIDsFromTermNames(
     naja::DNL::DNLFull* dnl,
     const std::vector<size_t>& termDNLID2varID,
-    std::unordered_set<size_t>& clockCarrierVarIDs) {
+    std::unordered_set<size_t>& clockCarrierVarIDs,
+    const LeafBoundary* boundary) {
   if (dnl == nullptr) {
     return 0;  // LCOV_EXCL_LINE
   }
@@ -2056,6 +2067,9 @@ size_t expandClockCarrierVarIDsFromTermNames(
     const auto& term = dnl->getDNLTerminalFromID(termID);
     if (term.isNull()) {
       continue;  // LCOV_EXCL_LINE
+    }
+    if (boundary && boundary->containsInstance(term.getDNLInstance().getID())) {
+      continue;
     }
     // Model names such as sky130_fd_sc_hs__clkbuf_* are also used as ordinary
     // data buffers after routing.  Name-only promotion is therefore limited to
@@ -2145,8 +2159,9 @@ size_t expandClockCarrierVarIDsFromPureClockTermExprs(
 
 class PureClockCarrierStructureIndex {
  public:
-  explicit PureClockCarrierStructureIndex(naja::DNL::DNLFull* dnl)
-      : dnl_(dnl),
+  explicit PureClockCarrierStructureIndex(naja::DNL::DNLFull* dnl,
+                                         const LeafBoundary* boundary)
+      : dnl_(dnl), boundary_(boundary),
         pureClockMemoStrict_(dnl == nullptr ? 0 : dnl->getNBterms(), -1),
         pureClockMemoAfterNamedClockTree_(
             dnl == nullptr ? 0 : dnl->getNBterms(), -1) {
@@ -2220,6 +2235,9 @@ class PureClockCarrierStructureIndex {
     if (term.isNull()) {
       return false;  // LCOV_EXCL_LINE
     }
+    if (boundary_ && boundary_->containsInstance(term.getDNLInstance().getID())) {
+      return false;
+    }
 
     if (term.isTopPort() &&
         term.getSnlBitTerm()->getDirection() !=
@@ -2274,6 +2292,7 @@ class PureClockCarrierStructureIndex {
   }
 
   naja::DNL::DNLFull* dnl_ = nullptr;
+  const LeafBoundary* boundary_ = nullptr;
   std::vector<int8_t> pureClockMemoStrict_;
   std::vector<int8_t> pureClockMemoAfterNamedClockTree_;
   std::vector<naja::DNL::DNLID> pureClockCarrierTermIDs_;
@@ -2290,6 +2309,7 @@ struct ExtractContext {
   KEPLER_FORMAL::BuildPrimaryOutputClauses builder;
   // LCOV_EXCL_STOP
   decltype(naja::DNL::get()) dnl = nullptr;
+  const LeafBoundary* boundary = nullptr;
   std::unordered_map<naja::DNL::DNLID, SignalKey> inputKeyByTerm;
   std::unordered_map<naja::DNL::DNLID, SignalKey> topOutputKeyByTerm;
   // LCOV_EXCL_START
@@ -2414,6 +2434,13 @@ void collectInitialBuilderBoundary(ExtractContext& ctx) {
   }
 
   ctx.dnl = naja::DNL::get();
+  ctx.boundary = ctx.builder.getLeafBoundary();
+}
+
+SignalKey boundaryPortKey(const BoundaryPort& port) {
+  return {{uint64_t{1} << 62, static_cast<uint64_t>(port.pairIndex),
+           static_cast<uint64_t>(naja::NL::NLName(port.pinName).getID())},
+          {static_cast<naja::NL::NLID::DesignObjectID>(port.bit)}};
 }
 
 void collectTopInterfaceTerms(ExtractContext& ctx, SequentialDesignModel& model) {
@@ -2432,6 +2459,19 @@ void collectTopInterfaceTerms(ExtractContext& ctx, SequentialDesignModel& model)
     ctx.topOutputKeys.insert(key);
     ctx.topOutputKeyByTerm.emplace(termID, key);
     ctx.allObservedOutputs.insert(key);
+  }
+  if (ctx.boundary) {
+    for (const auto termID : ctx.boundary->getOutputs()) {
+      const auto& port = *ctx.boundary->getPort(termID);
+      const auto key = boundaryPortKey(port);
+      model.displayNameByKey.emplace(key, port.topTermName + "[0]");
+      ctx.topOutputKeys.insert(key);
+      ctx.topOutputKeyByTerm.emplace(termID, key);
+      ctx.allObservedOutputs.insert(key);
+    }
+    for (const auto termID : ctx.boundary->getInputs()) {
+      ctx.topInputKeys.insert(boundaryPortKey(*ctx.boundary->getPort(termID)));
+    }
   }
 }
 
@@ -2458,6 +2498,16 @@ void filterOpaqueBuilderInputs(
 void skipTopOutputsReachedByOpaqueTerminals(
     ExtractContext& ctx,
     SequentialDesignModel& model) {
+  if (ctx.boundary) {
+    // The fanout precheck follows cell arcs across selected leaves. Let the
+    // PI/PO clouds report opaque dependencies while stopping at those leaves.
+    ctx.hasOpaqueInternalTerminals = std::any_of(
+        model.connectivitySkipInfoByKey.begin(), model.connectivitySkipInfoByKey.end(),
+        [](const auto& item) {
+          return item.second.origin == ConnectivitySkipOrigin::OpaqueInternal;
+        });
+    return;
+  }
   std::vector<OpaqueTerminalSeed> opaqueSeeds;
   for (const auto leafID : ctx.dnl->getLeaves()) {
     const auto& instance = ctx.dnl->getDNLInstanceFromID(leafID);
@@ -2511,6 +2561,14 @@ void classifyBuilderBoundaryTerms(ExtractContext& ctx, SequentialDesignModel& mo
   // environment/state/output buckets here.
   for (const auto inputTermID : ctx.builder.getInputs()) {
     const auto& term = ctx.dnl->getDNLTerminalFromID(inputTermID);
+    if (ctx.boundary && ctx.boundary->isInput(inputTermID)) {
+      const auto& port = *ctx.boundary->getPort(inputTermID);
+      const auto key = boundaryPortKey(port);
+      ctx.inputKeyByTerm.emplace(inputTermID, key);
+      model.displayNameByKey.emplace(key, port.topTermName + "[0]");
+      ctx.environmentInputs.insert(key);
+      continue;
+    }
     if (isConstantInternalOutputTerm(term)) {
       continue;
     }
@@ -3103,6 +3161,9 @@ void collectSequentialTransitions(ExtractContext& ctx, SequentialDesignModel& mo
   // Record enough pin information to reconstruct Q' after the combinational
   // Boolean expressions have been built.
   for (auto leafID : ctx.dnl->getLeaves()) {
+    if (ctx.boundary && ctx.boundary->containsInstance(leafID)) {
+      continue;
+    }
     const auto& instance = ctx.dnl->getDNLInstanceFromID(leafID);
     if (naja::NL::SNLDesignModeling::hasMemoryInterface(
             instance.getSNLInstance()->getModel()) &&
@@ -3256,7 +3317,8 @@ void recordBoundaryInputVars(
   // aligned SEC input/state signal.
   for (const auto inputTermID : builderInputs) {
     const auto& term = ctx.dnl->getDNLTerminalFromID(inputTermID);
-    if (isConstantInternalOutputTerm(term)) {
+    if (!(ctx.boundary && ctx.boundary->isInput(inputTermID)) &&
+        isConstantInternalOutputTerm(term)) {
       continue;
     }
     const auto keyIt = ctx.inputKeyByTerm.find(inputTermID);
@@ -3875,7 +3937,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
   // that become available as the dependency frontier is materialized.
   if (ctx.pureClockCarrierStructure == nullptr) {
     ctx.pureClockCarrierStructure =
-        std::make_unique<PureClockCarrierStructureIndex>(ctx.dnl);
+        std::make_unique<PureClockCarrierStructureIndex>(ctx.dnl, ctx.boundary);
   }
   const auto& pureClockCarrierStructure = *ctx.pureClockCarrierStructure;
   std::unordered_set<naja::DNL::DNLID> pureClockCarrierTermIDs(
@@ -3907,7 +3969,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
         expandClockCarrierVarIDsFromBoundaryNames(model, topClockCarrierVarIDs);
     // LCOV_EXCL_START
     const size_t addedTermNames = expandClockCarrierVarIDsFromTermNames(
-        ctx.dnl, termDNLID2varID, topClockCarrierVarIDs);
+        ctx.dnl, termDNLID2varID, topClockCarrierVarIDs, ctx.boundary);
     // LCOV_EXCL_STOP
     const size_t addedStructure =
         pureClockCarrierStructure.addMappedCarrierVarIDs(model, termDNLID2varID,
@@ -4044,7 +4106,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
         const bool alreadyMaterialized =
             !materializedOutputTerms.insert(clockTerm.termID).second;
         if ((!alreadyMaterialized ||
-             hasBuildableCombinationalRoot(ctx.dnl, clockTerm.termID)) &&
+             hasBuildableCombinationalRoot(ctx.dnl, clockTerm.termID, ctx.boundary)) &&
             batchOutputTermSet.insert(clockTerm.termID).second) {
           batchOutputTerms.push_back(clockTerm.termID);
         }
@@ -4055,7 +4117,7 @@ RebuiltTransitionArtifacts rebuildRequiredStateTransitions(
       const auto dependencyOutputs = materializeBuilderOutputs(
           batchOutputTerms, builderInputs, termDNLID2varID,
           ctx.collectedSkippedOutputs, ctx.secDiagEnabled, ctx.topName.c_str(),
-          "dependency build");
+          "dependency build", ctx.boundary);
       appendUniqueTermIDs(builderInputs, dependencyOutputs.inputs);
       appendUniqueTermIDs(builderOutputs, dependencyOutputs.outputs);
       mergeBuilderTermVarIDs(termDNLID2varID,
@@ -4784,7 +4846,8 @@ void logExtractedModelDebugSummary(const ExtractContext& ctx,
 
 }  // namespace
 
-SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
+SequentialDesignModel SequentialDesignModel::extract(
+    naja::NL::SNLDesign* top, const BoundaryPairs& pairs, size_t side) {
   if (top == nullptr) {
     throw std::invalid_argument("SequentialDesignModel::extract: null top");
   }
@@ -4805,6 +4868,7 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
       .secDiagEnabled = std::getenv("KEPLER_SEC_DIAG") != nullptr,
   };
   ctx.builder.setRetainDnl(true);
+  ctx.builder.setBoundaryPairs(pairs, side);
 
   // Phase 1: collect the raw boundary, classify top I/O vs sequential state,
   // and scan leaf sequentials so the later formula build knows what it must
@@ -4873,7 +4937,7 @@ SequentialDesignModel SequentialDesignModel::extract(naja::NL::SNLDesign* top) {
         ctx.collectedSkippedOutputs,
         ctx.secDiagEnabled,
         ctx.topName.c_str(),
-        "structured memory dependency build");
+        "structured memory dependency build", ctx.boundary);
     appendUniqueTermIDs(builderInputs, dependencyOutputs.inputs);
     appendUniqueTermIDs(builderOutputs, dependencyOutputs.outputs);
     mergeBuilderTermVarIDs(termDNLID2varID, dependencyOutputs.termDNLID2varID);

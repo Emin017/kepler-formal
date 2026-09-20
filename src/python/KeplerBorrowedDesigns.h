@@ -5,6 +5,7 @@
 
 #include "RunResult.h"
 #include "Config.h"
+#include "DesignBoundary.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 
 namespace KEPLER_FORMAL {
@@ -23,6 +24,7 @@ struct BorrowedDesignOptions {
   bool reportSkippedOutputs = false;
   std::string logFile;
   std::string logLevel;
+  BoundaryPairs setAsBoundary;
 };
 
 // Verify two live designs in the current Naja universe, without cloning,
