@@ -61,52 +61,57 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
     return {};
   }
 
-  // Incremental assumptions let refinement remove hypotheses. Keeping a
-  // rejected hypothesis as a clause would make later proofs unsound.
-  SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
-  FrameVariableStore variables(solver, problem.allSymbols, 2);
-  FrameFormulaEncoder current(solver, variables.makeLeafLits(0));
-  FrameFormulaEncoder next(solver, variables.makeLeafLits(1));
-  for (const auto& value : problem.dualRailStatePairs) {
-    for (size_t frame : {0u, 1u}) {
-      solver.addClause({variables.getLiteral(value.mayBeOne, frame),
-                        variables.getLiteral(value.mayBeZero, frame)});
-    }
-  }
-  for (size_t symbol : targets) {
-    addLiteralEquivalence(solver, variables.getLiteral(symbol, 1),
-                          current.encode(transitions.at(symbol)));
-  }
-  std::vector<int> hypotheses;
-  std::vector<int> conclusions;
-  for (const auto* candidate : active) {
-    BoolExpr* relation = BoolExpr::createTrue();
-    for (const auto& [lhs, rhs] : candidate->equalities) {
-      relation = BoolExpr::And(relation, BoolExpr::Not(
-          BoolExpr::Xor(BoolExpr::Var(lhs), BoolExpr::Var(rhs))));
-    }
-    if (!options.allowXEqualityInInternalRelations) {
-      for (const auto& value : candidate->values) {
-        relation = BoolExpr::And(relation, BoolExpr::Xor(
-            BoolExpr::Var(value.mayBeOne), BoolExpr::Var(value.mayBeZero)));
-      }
-    }
-    hypotheses.push_back(current.encode(relation));
-    conclusions.push_back(next.encode(relation));
-  }
+  // Hypotheses are applied by literal substitution rather than as solver
+  // assumptions: encoding both sides' transitions over the same input
+  // literals lets CaDiCaL's congruence closure discharge structurally
+  // identical logic without search.  Refinement therefore re-encodes in a
+  // fresh solver instead of retracting assumptions.
   SATSolverWrapper::CadicalWorkBudget budget(100000, 1000000, 10000000);
   SATSolverWrapper::ScopedCadicalWorkBudget budgetScope(budget);
   for (size_t round = 0; round < 64 && !active.empty(); ++round) {
-    const int selector = solver.newVar() + 2;
-    std::vector<int> badClause{-selector};
-    for (int conclusion : conclusions) {
-      badClause.push_back(-conclusion);
+    SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
+    FrameVariableStore variables(solver, problem.allSymbols, 2);
+    auto currentLeaves = variables.makeLeafLits(0);
+    for (const auto* candidate : active) {
+      for (const auto& [lhs, rhs] : candidate->equalities) {
+        currentLeaves[rhs] = currentLeaves.at(lhs);
+      }
+    }
+    FrameFormulaEncoder current(solver, currentLeaves);
+    FrameFormulaEncoder next(solver, variables.makeLeafLits(1));
+    for (const auto& value : problem.dualRailStatePairs) {
+      solver.addClause({currentLeaves.at(value.mayBeOne),
+                        currentLeaves.at(value.mayBeZero)});
+      solver.addClause({variables.getLiteral(value.mayBeOne, 1),
+                        variables.getLiteral(value.mayBeZero, 1)});
+    }
+    for (size_t symbol : targets) {
+      addLiteralEquivalence(solver, variables.getLiteral(symbol, 1),
+                            current.encode(transitions.at(symbol)));
+    }
+    std::vector<int> conclusions;
+    std::vector<int> badClause;
+    for (const auto* candidate : active) {
+      BoolExpr* relation = BoolExpr::createTrue();
+      for (const auto& [lhs, rhs] : candidate->equalities) {
+        relation = BoolExpr::And(relation, BoolExpr::Not(
+            BoolExpr::Xor(BoolExpr::Var(lhs), BoolExpr::Var(rhs))));
+      }
+      if (!options.allowXEqualityInInternalRelations) {
+        for (const auto& value : candidate->values) {
+          relation = BoolExpr::And(relation, BoolExpr::Xor(
+              BoolExpr::Var(value.mayBeOne), BoolExpr::Var(value.mayBeZero)));
+        }
+      }
+      // Equalities are tautological after substitution; definedness
+      // hypotheses (when X equality is disallowed) remain real constraints.
+      solver.addClause({current.encode(relation)});
+      conclusions.push_back(next.encode(relation));
+      badClause.push_back(-conclusions.back());
     }
     solver.addClause(badClause);
-    auto assumptions = hypotheses;
-    assumptions.push_back(selector);
     const auto status = solver.solveWithAssumptionsStatus(
-        assumptions, 10000, 100000, 1000000);
+        {}, 10000, 100000, 1000000);
     if (status == SATSolverWrapper::SolveStatus::Unsat) {
       std::set<std::pair<size_t, size_t>> proved;
       for (const auto* candidate : active) {
@@ -120,15 +125,10 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
     size_t kept = 0;
     for (size_t i = 0; i < active.size(); ++i) {
       if (solver.getLiteralValue(conclusions[i])) {
-        active[kept] = active[i];
-        hypotheses[kept] = hypotheses[i];
-        conclusions[kept++] = conclusions[i];
+        active[kept++] = active[i];
       }
     }
     active.resize(kept);
-    hypotheses.resize(kept);
-    conclusions.resize(kept);
-    solver.addClause({-selector});
   }
   // An unfinished fixed point is not a certificate for any surviving guess.
   return {};
