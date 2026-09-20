@@ -13302,6 +13302,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
       KEPLER_FORMAL::Config::SolverType::KISSAT,
       SecEngine::Pdr,
       SecEncoding::DualRailSteady);
+  strategy.setInternalRelationOptions({false, false});
   const auto result = strategy.runExtractedModels(model0, model1, 0);
   const std::string stderrOutput = testing::internal::GetCapturedStderr();
 
@@ -13356,6 +13357,7 @@ TEST_F(SequentialEquivalenceStrategyTests,
       KEPLER_FORMAL::Config::SolverType::KISSAT,
       SecEngine::Imc,
       SecEncoding::DualRailSteady);
+  strategy.setInternalRelationOptions({false, false});
   const auto result = strategy.runExtractedModels(model0, model1, 0);
   const std::string stderrOutput = testing::internal::GetCapturedStderr();
 
