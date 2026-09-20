@@ -192,6 +192,11 @@ void learnInternalStateRelations(
   const auto proved = proveInternalRelations(problem, candidates, options, solverType);
   problem.sameFrameStateEqualityPairs0.insert(
       problem.sameFrameStateEqualityPairs0.end(), proved.begin(), proved.end());
+  for (const auto& [lhs, rhs] : proved) {
+    BoolExpr* equality = BoolExpr::Not(BoolExpr::Xor(BoolExpr::Var(lhs), BoolExpr::Var(rhs)));
+    problem.learnedInternalRelationInvariant = problem.learnedInternalRelationInvariant == nullptr
+        ? equality : BoolExpr::And(problem.learnedInternalRelationInvariant, equality);
+  }
   if (diagnostics) {
     printf("SEC summary: internal_relation_candidates=%zu proved_rail_equalities=%zu "
            "allow_x_equality_in_internal_relations=%d\n",

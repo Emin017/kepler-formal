@@ -217,6 +217,9 @@ are rechecked. Only the certified equalities are added to the shared problem
 used by KI, IMC, PDR, and BTOR2 export. The pass is bounded (4096 candidates,
 250000 transition expression nodes, at most 64 refinement rounds and bounded SAT
 queries); an unfinished proof adds no relations.
+Exact IMC reuses the certified conjunction in interpolation, reachable-state
+enumeration, and invariant validation. With learning disabled, the conjunction
+is absent and these queries retain their original constraints.
 
 With `allow_x_equality_in_internal_relations: true`, an internal relation accepts
 0/0, 1/1, and X/X, but never X/0 or X/1. Both rails must agree. Disabling the option

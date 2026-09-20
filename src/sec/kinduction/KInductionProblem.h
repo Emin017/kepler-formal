@@ -209,6 +209,11 @@ struct KInductionProblem {
   // values: dual-rail candidates equate complete ternary encodings.
   std::vector<std::pair<size_t, size_t>> sameFrameStateEqualityPairs0;
   std::vector<std::pair<size_t, size_t>> sameFrameStateEqualityPairs1;
+  // Only independently certified learned relations, for exact IMC queries.
+  // Null when learning is disabled or no candidate was proved.
+  // With learning enabled, allow_x_equality_in_internal_relations=false still
+  // permits proved binary-defined relations; true also permits X/X relations.
+  BoolExpr* learnedInternalRelationInvariant = nullptr;
   std::vector<DualRailSymbolPair> dualRailStatePairs;
   std::vector<BoolExpr*> observedOutputExprs0;
   std::vector<BoolExpr*> observedOutputExprs1;

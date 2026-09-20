@@ -8,7 +8,10 @@
 
 #include "BoolExprCache.h"
 #include "model/SequentialDesignModel.h"
+#include "imc/ExactInterpolantSynthesizer.h"
+#include "imc/IMCEngine.h"
 #include "proof/InternalRelations.h"
+#include "proof/ProofEngineShared.h"
 #include "strategy/SequentialEquivalenceStrategy.h"
 
 namespace KEPLER_FORMAL::SEC {
@@ -266,6 +269,142 @@ TEST_F(InternalRelationsTests, UnfinishedRefinementPublishesNoSurvivingGuesses) 
     candidates.push_back({{{lhs, rhs}}, {}});
   }
   EXPECT_TRUE(proveInternalRelations(problem, candidates, {}, Config::SolverType::KISSAT).empty());
+}
+
+SequentialDesignModel internalRelationRingModel(const std::string& prefix = "") {
+  SequentialDesignModel model;
+  const SignalKey q{{1}, {1}}, r{{2}, {2}}, output{{3}, {3}};
+  model.stateBits = {q, r};
+  model.inputVarByKey = {{q, 2}, {r, 3}};
+  model.displayNameByKey = {{q, prefix + "q"}, {r, prefix + "r"}, {output, "y"}};
+  model.initialStateValueByKey = {{q, false}, {r, false}};
+  model.nextStateExprByStateKey = {{q, BoolExpr::Var(3)}, {r, BoolExpr::Not(BoolExpr::Var(2))}};
+  model.allObservedOutputs = model.observedOutputs = {output};
+  model.observedOutputExprByKey[output] = BoolExpr::Var(2);
+  return model;
+}
+
+TEST_F(InternalRelationsTests, ExactImcUsesCertifiedRelationsToCloseTheInductionGap) {
+  const auto model = internalRelationRingModel();
+  for (auto solver : {Config::SolverType::KISSAT, Config::SolverType::CADICAL,
+                      Config::SolverType::GLUCOSE}) {
+    for (bool learn : {false, true}) {
+      for (bool allowX : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "solver=" << static_cast<int>(solver)
+                     << " learn=" << learn << " allowX=" << allowX);
+        SequentialEquivalenceStrategy strategy(nullptr, nullptr, solver,
+                                               SecEngine::Imc, SecEncoding::Binary);
+        strategy.setInternalRelationOptions({learn, allowX});
+        // The one-step frontier is not closed, and output equality alone is
+        // not inductive. The two jointly certified register equalities close it.
+        const auto result = strategy.runExtractedModels(model, model, 0);
+        EXPECT_EQ(result.status, learn ? SequentialEquivalenceStatus::Equivalent
+                                       : SequentialEquivalenceStatus::Inconclusive);
+      }
+    }
+  }
+}
+
+TEST_F(InternalRelationsTests, ExactImcConstraintsRespectBothSwitchesAndPreserveTheProperty) {
+  const auto model = heldModel(false, false);
+  for (bool learn : {false, true}) {
+    for (bool allowX : {false, true}) {
+      auto problem = heldX();
+      problem.auxiliaryStateSymbols = {6};
+      problem.allSymbols.push_back(6);
+      problem.initialStateAssignments.emplace_back(6, false);
+      problem.auxiliaryTransitions = {{6, BoolExpr::Xor(BoolExpr::Var(2), BoolExpr::Var(4))}};
+      problem.property = BoolExpr::Not(BoolExpr::Var(6));
+      problem.bad = BoolExpr::Var(6);
+      learnInternalStateRelations(model, model, problem, {learn, allowX},
+                                  Config::SolverType::KISSAT, false);
+      const auto constraints = problem.learnedInternalRelationInvariant;
+      const bool enabled = learn && allowX;
+      EXPECT_EQ(constraints != nullptr, enabled);
+      EXPECT_EQ(isInductiveInvariant(problem, problem.property, Config::SolverType::KISSAT,
+                                     constraints), enabled);
+      // Existing callers that omit the optional constraints keep the old query.
+      EXPECT_FALSE(isInductiveInvariant(problem, problem.property, Config::SolverType::KISSAT));
+      EXPECT_FALSE(invariantExcludesBadStates(problem, BoolExpr::createTrue(),
+                                             Config::SolverType::KISSAT, constraints));
+      EXPECT_EQ(problem.property, BoolExpr::Not(BoolExpr::Var(6)));
+      EXPECT_EQ(problem.bad, BoolExpr::Var(6));
+
+      auto relationOutput = problem;
+      relationOutput.bad = BoolExpr::Xor(BoolExpr::Var(2), BoolExpr::Var(4));
+      EXPECT_EQ(invariantExcludesBadStates(relationOutput, BoolExpr::createTrue(),
+                                           Config::SolverType::KISSAT, constraints), enabled);
+    }
+  }
+}
+
+TEST_F(InternalRelationsTests, ExactInterpolationConstrainsBothTransitionFramesOnlyWhenEnabled) {
+  const auto model = internalRelationRingModel();
+  const std::unordered_map<size_t, size_t> nextSymbols{{2, 6}, {3, 7}, {4, 8}, {5, 9}};
+  for (bool learn : {false, true}) {
+    auto problem = binaryRing();
+    learnInternalStateRelations(model, model, problem, {learn, false},
+                                Config::SolverType::KISSAT, false);
+    const auto original = buildOneStepTransitionFormula(problem, nextSymbols);
+    const auto constrained = buildOneStepTransitionFormula(
+        problem, nextSymbols, problem.learnedInternalRelationInvariant);
+    if (!learn) {
+      EXPECT_EQ(original, constrained);
+    }
+    for (const auto& [lhs, rhs] : {std::pair<size_t, size_t>{2, 4}, {6, 8}}) {
+      const auto unequal = BoolExpr::Xor(BoolExpr::Var(lhs), BoolExpr::Var(rhs));
+      EXPECT_TRUE(isProofFormulaSatisfiable(BoolExpr::And(original, unequal), Config::SolverType::KISSAT));
+      EXPECT_EQ(isProofFormulaSatisfiable(BoolExpr::And(constrained, unequal),
+                                         Config::SolverType::KISSAT), !learn);
+    }
+  }
+}
+
+TEST_F(InternalRelationsTests, ExactImcReachableFrontierStillClosesWithLearningEnabledOrDisabled) {
+  auto model0 = internalRelationRingModel("left_");
+  auto model1 = internalRelationRingModel("right_");
+  const SignalKey helper{{4}, {4}};
+  for (auto* model : {&model0, &model1}) {
+    model->stateBits.push_back(helper);
+    model->inputVarByKey[helper] = 4;
+    model->displayNameByKey[helper] = "helper";
+    model->initialStateValueByKey[helper] = false;
+    model->nextStateExprByStateKey[helper] = BoolExpr::createFalse();
+  }
+  for (bool learn : {false, true}) {
+    SequentialEquivalenceStrategy strategy(nullptr, nullptr, Config::SolverType::KISSAT,
+                                           SecEngine::Imc, SecEncoding::Binary);
+    strategy.setInternalRelationOptions({learn, false});
+    // Only the unrelated helper matches by name. The public ring equality
+    // still needs the exact reachable frontier to cover its four-state cycle.
+    const auto result = strategy.runExtractedModels(model0, model1, 3);
+    EXPECT_EQ(result.status, SequentialEquivalenceStatus::Equivalent);
+    EXPECT_EQ(result.bound, 3u);
+  }
+}
+
+TEST_F(InternalRelationsTests, ExactImcRetainsCounterexamplesWithValidLearnedRelations) {
+  const auto model0 = internalRelationRingModel();
+  auto model1 = model0;
+  model1.observedOutputExprByKey.begin()->second = BoolExpr::Not(BoolExpr::Var(2));
+  for (bool learn : {false, true}) {
+    for (bool allowX : {false, true}) {
+      SequentialEquivalenceStrategy strategy(nullptr, nullptr, Config::SolverType::KISSAT,
+                                             SecEngine::Imc, SecEncoding::Binary);
+      strategy.setInternalRelationOptions({learn, allowX});
+      EXPECT_EQ(strategy.runExtractedModels(model0, model1, 0).status,
+                SequentialEquivalenceStatus::Different);
+    }
+  }
+}
+
+TEST_F(InternalRelationsTests, RejectedCandidatesNeverReachExactImcConstraints) {
+  auto problem = binaryRing();
+  problem.transitions1[1].second = BoolExpr::Var(4);
+  const auto model = internalRelationRingModel();
+  learnInternalStateRelations(model, model, problem, {}, Config::SolverType::KISSAT, false);
+  EXPECT_EQ(problem.learnedInternalRelationInvariant, nullptr);
+  EXPECT_TRUE(problem.sameFrameStateEqualityPairs0.empty());
 }
 
 }  // namespace
