@@ -196,25 +196,25 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
   };
   for (size_t round = 0; round < 64 && !active.empty(); ++round) {
     std::vector<char> refuted(active.size(), 0);
+    // Both registers of a hypothesis share one current-frame literal.
+    std::unordered_map<size_t, size_t> merged;
+    merged.reserve(problem.allSymbols.size());
+    for (size_t symbol : problem.allSymbols) {
+      merged.emplace(symbol, symbol);
+    }
+    for (const auto* candidate : active) {
+      for (const auto& [lhs, rhs] : candidate->equalities) {
+        merged[rhs] = merged.at(lhs);
+      }
+    }
     for (size_t begin = 0, end = 0; begin < active.size(); begin = end) {
       SATSolverWrapper::CadicalWorkBudget budget(100000, 1000000, 10000000);
       SATSolverWrapper::ScopedCadicalWorkBudget budgetScope(budget);
       SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
-      FrameVariableStore variables(solver, problem.allSymbols, 2);
-      auto currentLeaves = variables.makeLeafLits(0);
-      for (const auto* candidate : active) {
-        for (const auto& [lhs, rhs] : candidate->equalities) {
-          currentLeaves[rhs] = currentLeaves.at(lhs);
-        }
-      }
-      FrameFormulaEncoder current(solver, currentLeaves);
-      FrameFormulaEncoder next(solver, variables.makeLeafLits(1));
-      for (const auto& value : problem.dualRailStatePairs) {
-        solver.addClause({currentLeaves.at(value.mayBeOne),
-                          currentLeaves.at(value.mayBeZero)});
-        solver.addClause({variables.getLiteral(value.mayBeOne, 1),
-                          variables.getLiteral(value.mayBeZero, 1)});
-      }
+      // A partition reads a small part of the design, so solver variables
+      // are created on first use rather than for every symbol.
+      FrameFormulaEncoder current(solver, {}, &merged, true, 0);
+      FrameFormulaEncoder next(solver, {}, true);
       std::set<size_t> targets;
       std::vector<int> conclusions;
       std::vector<int> badClause;
@@ -227,7 +227,7 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
         for (const auto& [lhs, rhs] : candidate->equalities) {
           for (size_t symbol : {lhs, rhs}) {
             if (targets.insert(symbol).second) {
-              addLiteralEquivalence(solver, variables.getLiteral(symbol, 1),
+              addLiteralEquivalence(solver, next.encode(BoolExpr::Var(symbol)),
                                     current.encode(transitions.at(symbol)));
             }
           }
@@ -245,6 +245,17 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
         solver.addClause({current.encode(relation)});
         conclusions.push_back(next.encode(relation));
         badClause.push_back(-conclusions.back());
+        for (const auto& value : candidate->values) {
+          solver.addClause({next.encode(BoolExpr::Var(value.mayBeOne)),
+                            next.encode(BoolExpr::Var(value.mayBeZero))});
+        }
+      }
+      for (const auto& value : problem.dualRailStatePairs) {
+        if (current.leafLits().contains(merged.at(value.mayBeOne)) ||
+            current.leafLits().contains(merged.at(value.mayBeZero))) {
+          solver.addClause({current.encode(BoolExpr::Var(value.mayBeOne)),
+                            current.encode(BoolExpr::Var(value.mayBeZero))});
+        }
       }
       const int allTogether = solver.newVar() + 2;
       badClause.push_back(-allTogether);
@@ -261,7 +272,7 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
         }
       } else if (status == SATSolverWrapper::SolveStatus::Sat) {
         std::unordered_map<size_t, bool> counterexample;
-        for (const auto& [symbol, literal] : currentLeaves) {
+        for (const auto& [symbol, literal] : current.leafLits()) {
           counterexample[symbol] = solver.getLiteralValue(literal);
         }
         refuteBySimulation(problem, transitions, active, options, counterexample, refuted);

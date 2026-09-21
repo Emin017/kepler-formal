@@ -48,6 +48,10 @@ one transition.
   Every hypothesis is merged in every partition and each candidate is proved in
   exactly one, so splitting loses no relation. A large design is split rather
   than skipped. (Mishchenko et al., section 3.3.)
+- **Variables on first use.** A partition reads a small part of the design, so
+  its solver creates a variable only when the encoded logic first mentions a
+  symbol, not one per symbol per frame. This is an implementation choice, not a
+  technique from the papers. It lowers memory and encode time per partition.
 - **Query.** Each partition asks whether some candidate in it can differ in the
   next frame.
   - UNSAT: all of its candidates hold under the hypotheses.
