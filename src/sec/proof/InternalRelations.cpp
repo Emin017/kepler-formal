@@ -10,6 +10,7 @@
 #include <random>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "model/SequentialDesignModel.h"
 #include "kinduction/SatEncoding.h"
@@ -173,6 +174,34 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
       continue;
     }
     active.push_back(&candidate);
+  }
+
+  // A design whose candidate logic is too large for the learner to pay off is
+  // skipped, leaving the output proof exactly as it is without learning. Shared
+  // logic counts once, and counting stops at the limit, so a large design is
+  // never materialized just to be measured.
+  constexpr size_t kLogicNodeLimit = size_t{1} << 23;
+  {
+    std::unordered_set<BoolExpr*> counted;
+    std::vector<BoolExpr*> stack;
+    for (const auto* candidate : active) {
+      for (const auto& [lhs, rhs] : candidate->equalities) {
+        stack.push_back(transitions.at(lhs));
+        stack.push_back(transitions.at(rhs));
+      }
+      while (!stack.empty()) {
+        BoolExpr* node = stack.back();
+        stack.pop_back();
+        if (node == nullptr || !counted.insert(node).second) {
+          continue;
+        }
+        stack.push_back(node->getLeft());
+        stack.push_back(node->getRight());
+      }
+      if (counted.size() > kLogicNodeLimit) {
+        return {};
+      }
+    }
   }
 
   // Hypotheses are applied by literal substitution rather than as solver

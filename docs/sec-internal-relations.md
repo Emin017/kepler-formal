@@ -32,7 +32,17 @@ registers to be binary-defined.
 A candidate is kept only if its equalities already hold in the initial state
 assignments, and both registers have a transition.
 
-## 3. Inductive step
+## 3. Size gate
+
+The logic behind all remaining candidates is counted, each shared node once.
+Above about 8 million nodes the learner is skipped and the output proof runs
+exactly as it does without learning. Counting stops at the limit, so a large
+design is never built in memory just to be measured. tinyrocket has about 0.9
+million nodes; nangate45_black_parrot, with 666,543 candidates, exceeds the
+limit and would otherwise need over 13 GiB and tens of minutes. The gate is an
+engineering limit, not a technique from the papers.
+
+## 4. Inductive step
 
 `proveInternalRelations` looks for the largest subset of candidates that is
 jointly 1-step inductive: if every pair is equal now, every pair is equal after
@@ -60,7 +70,7 @@ one transition.
     on the same solver with its own budget, and only the pairs that stay
     undecided are dropped. (Mony et al., sections 2 and 4.1.)
 
-## 4. Refinement by simulation
+## 5. Refinement by simulation
 
 A counterexample is replayed on the original transitions as one of 64 parallel
 patterns; the other 63 are random states that also satisfy the hypotheses. The
@@ -71,7 +81,7 @@ only the pairs the solver model happens to separate. (Mony et al., section
 
 Simulation only drops candidates. It never proves one.
 
-## 5. Fixed point
+## 6. Fixed point
 
 Dropping a hypothesis weakens every other proof, so the rounds repeat with a
 fresh encoding. The survivors are returned only after a whole round drops
