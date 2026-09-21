@@ -4756,7 +4756,7 @@ TEST_F(KeplerFormalCliTests, ConfigTinyRocketSecVerificationAccepted) {
       "  - " + lib2.string() + "\n"
       "  - " + lib3.string() + "\n");
 
-  EXPECT_EQ(runWithConfigFile(cfgPath), kSecPartiallyProvedExitCode);
+  EXPECT_EQ(runWithConfigFile(cfgPath), kSecProvedExitCode);
   std::filesystem::remove(cfgPath);
 }
 
