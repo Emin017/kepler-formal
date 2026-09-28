@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -10,6 +10,7 @@
 #include "BoolExpr.h"
 #include "clocks/SecClockModel.h"
 #include "common/SignalKey.h"
+#include "../../utils/DesignBoundary.h"
 
 namespace naja::NL {
 class SNLDesign;
@@ -27,17 +28,13 @@ enum class ConnectivitySkipOrigin {
   MultiDriver,
   LogicalLoop,
   MultiClockDomain,
+  OpaqueInternal,
+  UnknownConstant,
 };
 
 struct ConnectivitySkipInfo {  // LCOV_EXCL_LINE
   ConnectivitySkipOrigin origin = ConnectivitySkipOrigin::NoDriver;
   std::string detail;
-};
-
-struct AbstractedSequentialBoundaryDetail {  // LCOV_EXCL_LINE
-  std::string instancePath;
-  std::vector<SignalKey> stateKeys;
-  std::vector<SignalKey> observedKeys;
 };
 
 // Normalized view of a sequential design after extracting the interface we
@@ -48,10 +45,6 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::vector<SignalKey> stateBits;
   std::vector<SignalKey> topInputKeys;
   std::vector<SignalKey> topOutputKeys;
-  // Opaque internal cut points introduced by the clause builder for leaves
-  // that are neither modeled sequentially nor reconstructed combinationally.
-  std::vector<SignalKey> internalBoundaryInputKeys;
-  std::vector<SignalKey> internalBoundaryOutputKeys;
   std::vector<SignalKey> allObservedOutputs;
   std::vector<SignalKey> observedOutputs;
   std::vector<SignalKey> skippedStateBits;
@@ -70,14 +63,13 @@ struct SequentialDesignModel {  // LCOV_EXCL_LINE
   std::unordered_map<SignalKey, ConnectivitySkipInfo, SignalKeyHash>
       connectivitySkipInfoByKey;
   std::vector<ComplementedStateRelation> complementedStateRelations;
-  std::vector<std::string> abstractedSequentialBoundaries;
-  std::vector<AbstractedSequentialBoundaryDetail>
-      abstractedSequentialBoundaryDetails;
   std::vector<std::string> unsupportedReasons;
 
-  // Extract the model from the given top design. Unsupported sequential
-  // structures are recorded in unsupportedReasons instead of being guessed.
-  static SequentialDesignModel extract(naja::NL::SNLDesign* top);
+  // Extract the model from the given top design. Opaque per-output cones are
+  // skipped; globally unsupported structures are recorded in unsupportedReasons.
+  static SequentialDesignModel extract(naja::NL::SNLDesign* top,
+                                       const BoundaryPairs& pairs = {},
+                                       size_t side = 0);
 
   bool hasUnsupportedFeatures() const {
     return !unsupportedReasons.empty();

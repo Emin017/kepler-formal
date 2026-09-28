@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #include "proof/ProofEngineShared.h"
 
@@ -141,11 +141,15 @@ std::unordered_map<size_t, BoolExpr*> buildTransitionExprByStateSymbol(
     const KInductionProblem& problem) {
   std::unordered_map<size_t, BoolExpr*> transitionExprByStateSymbol;
   transitionExprByStateSymbol.reserve(
-      problem.transitions0.size() + problem.transitions1.size());
+      problem.transitions0.size() + problem.transitions1.size() +
+      problem.auxiliaryTransitions.size());
   for (const auto& [stateSymbol, expr] : problem.transitions0) {
     transitionExprByStateSymbol.emplace(stateSymbol, expr);
   }
   for (const auto& [stateSymbol, expr] : problem.transitions1) {
+    transitionExprByStateSymbol.emplace(stateSymbol, expr);
+  }
+  for (const auto& [stateSymbol, expr] : problem.auxiliaryTransitions) {
     transitionExprByStateSymbol.emplace(stateSymbol, expr);
   }
   return transitionExprByStateSymbol;
@@ -171,9 +175,14 @@ std::unordered_map<size_t, size_t> buildComplementPrimaryByStateSymbol(
 std::unordered_set<size_t> buildCombinedStateSymbolSet(
     const KInductionProblem& problem) {
   std::unordered_set<size_t> stateSymbols;
-  stateSymbols.reserve(problem.state0Symbols.size() + problem.state1Symbols.size());
+  stateSymbols.reserve(
+      problem.state0Symbols.size() + problem.state1Symbols.size() +
+      problem.auxiliaryStateSymbols.size());
   stateSymbols.insert(problem.state0Symbols.begin(), problem.state0Symbols.end());
   stateSymbols.insert(problem.state1Symbols.begin(), problem.state1Symbols.end());
+  stateSymbols.insert(
+      problem.auxiliaryStateSymbols.begin(),
+      problem.auxiliaryStateSymbols.end());
   return stateSymbols;
 }
 
@@ -371,7 +380,8 @@ std::unordered_map<size_t, size_t> allocateFreshProofSymbols(
 
 BoolExpr* buildOneStepTransitionFormula(
     const KInductionProblem& problem,
-    const std::unordered_map<size_t, size_t>& nextStateSymbols) {
+    const std::unordered_map<size_t, size_t>& nextStateSymbols,
+    BoolExpr* certifiedStateConstraints) {
   BoolExpr* transition = BoolExpr::createTrue();
   for (const auto& [stateSymbol, expr] : problem.transitions0) {
     transition = BoolExpr::And(
@@ -379,6 +389,11 @@ BoolExpr* buildOneStepTransitionFormula(
         makeEqualityExpr(BoolExpr::Var(nextStateSymbols.at(stateSymbol)), expr));
   }
   for (const auto& [stateSymbol, expr] : problem.transitions1) {
+    transition = BoolExpr::And(
+        transition,
+        makeEqualityExpr(BoolExpr::Var(nextStateSymbols.at(stateSymbol)), expr));
+  }
+  for (const auto& [stateSymbol, expr] : problem.auxiliaryTransitions) {
     transition = BoolExpr::And(
         transition,
         makeEqualityExpr(BoolExpr::Var(nextStateSymbols.at(stateSymbol)), expr));
@@ -396,6 +411,11 @@ BoolExpr* buildOneStepTransitionFormula(
         makeEqualityExpr(
             BoolExpr::Var(nextStateSymbols.at(complementedSymbol)),
             BoolExpr::Not(BoolExpr::Var(nextStateSymbols.at(primarySymbol)))));
+  }
+  if (certifiedStateConstraints != nullptr) {
+    transition = BoolExpr::And(transition, BoolExpr::And(
+        certifiedStateConstraints,
+        remapProofFormula(certifiedStateConstraints, nextStateSymbols)));
   }
   return BoolExpr::simplify(transition);
 }
@@ -482,29 +502,36 @@ BoolExpr* selectValidatedStrengtheningInvariant(
 bool invariantExcludesBadStates(
     const KInductionProblem& problem,
     BoolExpr* invariant,
-    KEPLER_FORMAL::Config::SolverType solverType) {
+    KEPLER_FORMAL::Config::SolverType solverType,
+    BoolExpr* certifiedStateConstraints) {
   if (invariant == nullptr || problem.bad == nullptr) {
     // LCOV_EXCL_START
     return false;  // LCOV_EXCL_LINE
     // LCOV_EXCL_STOP
   }
-  return !isProofFormulaSatisfiable(
-      BoolExpr::And(invariant, problem.bad), solverType);
-}
-
-bool isInductiveInvariant(
-    const KInductionProblem& problem,
-    BoolExpr* invariant,
-    KEPLER_FORMAL::Config::SolverType solverType) {
-  FormulaSupportCache supportCache;
-  return isInductiveInvariant(problem, invariant, solverType, supportCache);
+  BoolExpr* query = BoolExpr::And(invariant, problem.bad);
+  if (certifiedStateConstraints != nullptr) {
+    query = BoolExpr::And(query, certifiedStateConstraints);
+  }
+  return !isProofFormulaSatisfiable(query, solverType);
 }
 
 bool isInductiveInvariant(
     const KInductionProblem& problem,
     BoolExpr* invariant,
     KEPLER_FORMAL::Config::SolverType solverType,
-    FormulaSupportCache& supportCache) {
+    BoolExpr* certifiedStateConstraints) {
+  FormulaSupportCache supportCache;
+  return isInductiveInvariant(problem, invariant, solverType, supportCache,
+                              certifiedStateConstraints);
+}
+
+bool isInductiveInvariant(
+    const KInductionProblem& problem,
+    BoolExpr* invariant,
+    KEPLER_FORMAL::Config::SolverType solverType,
+    FormulaSupportCache& supportCache,
+    BoolExpr* certifiedStateConstraints) {
   if (invariant == nullptr) {
     // LCOV_EXCL_START
     return false;  // LCOV_EXCL_LINE
@@ -513,9 +540,11 @@ bool isInductiveInvariant(
 
   const auto transitionExprByStateSymbol =
       buildTransitionExprByStateSymbol(problem);
+  BoolExpr* hypothesis = certifiedStateConstraints == nullptr ? invariant
+      : BoolExpr::And(invariant, certifiedStateConstraints);
   const auto querySymbols =
       inductiveInvariantQuerySymbols(
-          problem, invariant, transitionExprByStateSymbol, supportCache);
+          problem, hypothesis, transitionExprByStateSymbol, supportCache);
   const auto& invariantSupport = cachedFormulaSupport(invariant, supportCache);
   const auto invariantStateSupport =
       collectStateSupportSymbols(problem, invariantSupport);
@@ -539,10 +568,10 @@ bool isInductiveInvariant(
       invariantStateSupport);
 
   FrameFormulaEncoder currentEncoder(
-      solver, variables.makeLeafLits(0, invariantSupport));
+      solver, variables.makeLeafLits(0, cachedFormulaSupport(hypothesis, supportCache)));
   FrameFormulaEncoder nextEncoder(
       solver, variables.makeLeafLits(1, invariantSupport));
-  solver.addClause({currentEncoder.encode(invariant)});
+  solver.addClause({currentEncoder.encode(hypothesis)});
   solver.addClause({nextEncoder.encode(BoolExpr::Not(invariant))});
   return !solver.solve();
 }

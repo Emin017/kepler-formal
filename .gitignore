@@ -1,5 +1,5 @@
 # Copyright 2024-2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 build
 regress-output/
 
@@ -10,3 +10,18 @@ MODULE.bazel.lock
 
 # bazel run //:deps output (hermetic CMake-flow dependencies)
 /deps/
+
+# Optional Python MCP add-on
+__pycache__/
+*.py[cod]
+mcp/.venv/
+mcp/build/
+mcp/dist/
+mcp/src/*.egg-info/
+
+# Python package build artifacts
+dist/
+wheelhouse/
+*.egg-info/
+# Separately built NajaEDA provider wheels used by shared-runtime CI tests.
+.kepler-provider-wheels/

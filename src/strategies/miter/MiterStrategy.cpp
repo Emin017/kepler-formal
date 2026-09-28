@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #include "MiterStrategy.h"
 #include "BoolExpr.h"
@@ -21,10 +21,15 @@
 #include <memory>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 #include "SNLEquipotential.h"
 #include "SNLLogicCone.h"
 #include "../sat/SATSolverWrapper.h"
@@ -46,6 +51,7 @@ std::string MiterStrategy::logFileName_ = "";
 namespace {
 
 static std::shared_ptr<spdlog::logger> logger;
+static std::string actualLogFileName;
 
 void resetLogger() {
   if (logger) {
@@ -363,6 +369,8 @@ void ensureLoggerInitialized() {
     return;
   }
 
+  actualLogFileName.clear();
+
   try {
     // 1) Choose a default file name in the current working directory
     int logIndex = 0;
@@ -409,6 +417,7 @@ void ensureLoggerInitialized() {
     try {
       auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(chosenLogFile, true);
       logger = std::make_shared<spdlog::logger>("miter_logger", file_sink);
+      actualLogFileName = chosenLogFile;
     } catch (const spdlog::spdlog_ex& ex) {
       // LCOV_EXCL_START
       // Try a safe fallback: temp directory
@@ -416,12 +425,18 @@ void ensureLoggerInitialized() {
       std::error_code ec;
       auto tmp = std::filesystem::temp_directory_path(ec);
       if (!ec) {
-        std::filesystem::path fallback = tmp / ("miter_log_fallback_" + std::to_string(::getpid()) + ".txt");
+#ifdef _WIN32
+        const auto processId = ::_getpid();
+#else
+        const auto processId = ::getpid();
+#endif
+        std::filesystem::path fallback = tmp / ("miter_log_fallback_" + std::to_string(processId) + ".txt");
         // LCOV_DISABLED_STOP
         try {
           // LCOV_DISABLED_START
           auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(fallback.string(), true);
           logger = std::make_shared<spdlog::logger>("miter_logger", file_sink);
+          actualLogFileName = fallback.string();
         } catch (...) {
         // LCOV_DISABLED_STOP
           // Final fallback to stdout sink
@@ -648,6 +663,18 @@ int tseitinEncode(
     logFileName_ = logFileName;
   }
 
+std::string MiterStrategy::getActualLogFileName() {
+  return actualLogFileName;
+}
+
+void MiterStrategy::cleanupProcessState() {
+  resetLogger();
+  actualLogFileName.clear();
+  logFileName_.clear();
+  top0_ = nullptr;
+  top1_ = nullptr;
+}
+
 void MiterStrategy::setCnfDump(bool enabled, const std::string& path) {
   dumpCnf_ = enabled;
   dumpCnfPath_ = path;
@@ -656,6 +683,20 @@ void MiterStrategy::setCnfDump(bool enabled, const std::string& path) {
 void MiterStrategy::setPoCnfDump(bool enabled, const std::string& path) {
   dumpPoCnf_ = enabled;
   dumpPoCnfPath_ = path;
+}
+
+static void checkBoundaryMatch(size_t commonCount,
+                               size_t design0Count,
+                               size_t design1Count) {
+  if (commonCount == design0Count && commonCount == design1Count) {
+    return;
+  }
+  throw std::runtime_error(
+      "LEC boundary mismatch: design1 has " + std::to_string(design0Count) +
+      " boundary inputs, design2 has " + std::to_string(design1Count) +
+      ", and " + std::to_string(commonCount) +
+      " match by name. Use --allow-boundary-mismatch or "
+      "allow-boundary-mismatch: true to continue.");
 }
 
 size_t MiterStrategy::normalizeInputs(
@@ -837,6 +878,10 @@ void MiterStrategy::init(bool enableLogging) {
     logger->info("Collecting POs for design 0: {}\n", top0_->getName().getString().c_str());
   }
   builder0_.collect();
+  std::vector<BuildPrimaryOutputClauses::PathKey> boundaryInputs0;
+  if (!allowBoundaryMismatch_) {
+    boundaryInputs0 = builder0_.getLecBoundaryInputs();
+  }
   if (enableLogging) {
     logger->info("Collected {} PIs for design 0\n", builder0_.getInputs().size());
     logger->info("Collected {} POs for design 0\n", builder0_.getOutputs().size());
@@ -850,6 +895,17 @@ void MiterStrategy::init(bool enableLogging) {
     logger->info("Collecting POs for design 1: {}\n", top1_->getName().getString().c_str());
   }
   builder1_.collect();
+  if (builder0_.getLeafBoundary() && builder1_.getLeafBoundary()) {
+    validateBoundaryInterfaces(builder0_.getLeafBoundary()->getPorts(),
+                               builder1_.getLeafBoundary()->getPorts());
+  }
+  if (!allowBoundaryMismatch_) {
+    auto boundaryInputs1 = builder1_.getLecBoundaryInputs();
+    const size_t commonBoundarySize =
+        normalizeCompactInputs(boundaryInputs0, boundaryInputs1);
+    checkBoundaryMatch(commonBoundarySize, boundaryInputs0.size(),
+                       boundaryInputs1.size());
+  }
   if (enableLogging) {
     logger->info("Collected {} PIs for design 1\n", builder1_.getInputs().size());
     logger->info("Collected {} POs for design 1\n", builder1_.getOutputs().size());
@@ -860,6 +916,11 @@ void MiterStrategy::init(bool enableLogging) {
 }
 
 bool MiterStrategy::run(bool compact) {
+#ifdef KEPLER_BORROWED_DESIGNS_ONLY
+  if (compact) {
+    throw std::invalid_argument("Compact miter mode cannot delete borrowed Python designs");
+  }
+#endif
   NLUniverse* univ = NLUniverse::get();
   // normalize inputs and outputs
   std::vector<naja::DNL::DNLID> inputs0sort;
@@ -889,10 +950,12 @@ bool MiterStrategy::run(bool compact) {
   const auto& inputs2inputsIDs0 = builder0_.getInputs2InputsIDs();
   const auto&outputs2outputsIDs0 = builder0_.getOutputs2OutputsIDs();
   naja::DNL::destroy();
+#ifndef KEPLER_BORROWED_DESIGNS_ONLY
   if (compact) {
     top0_->getDB()->destroy();
     top0_ = nullptr;
-  } 
+  }
+#endif
   univ->setTopDesign(top1_);
   builder1_.setInputs(inputs1sort);
   builder1_.setOutputs(outputs1sort);
@@ -903,10 +966,12 @@ bool MiterStrategy::run(bool compact) {
   const auto& inputs2inputsIDs1 = builder1_.getInputs2InputsIDs();
   const auto& outputs2outputsIDs1 = builder1_.getOutputs2OutputsIDs();
   naja::DNL::destroy();
+#ifndef KEPLER_BORROWED_DESIGNS_ONLY
   if (compact) {
     top1_->getLibrary()->destroy();
     top1_ = nullptr;
   }
+#endif
   // print path to var names
   const auto & inputs2DnlIds = builder0_.getInputs();
   // var names for inputs
@@ -1235,6 +1300,14 @@ bool MiterStrategy::runCompactSnapshots(const CompactSnapshot& snapshot0,
   auto inputs0 = snapshot0.inputs;
   auto inputs1 = snapshot1.inputs;
   const size_t commonSize = normalizeCompactInputs(inputs0, inputs1);
+  if (!allowBoundaryMismatch_) {
+    auto boundaryInputs0 = snapshot0.boundaryInputs;
+    auto boundaryInputs1 = snapshot1.boundaryInputs;
+    const size_t commonBoundarySize =
+        normalizeCompactInputs(boundaryInputs0, boundaryInputs1);
+    checkBoundaryMatch(commonBoundarySize, boundaryInputs0.size(),
+                       boundaryInputs1.size());
+  }
   lastCommonVarID_ = commonSize > 0 ? (commonSize - 1) + 2 : 1;
 
   auto outputs0 = snapshot0.outputs;

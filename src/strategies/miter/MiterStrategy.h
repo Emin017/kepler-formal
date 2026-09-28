@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #include <vector>
 #include "BoolExpr.h"
@@ -21,6 +21,7 @@ class MiterStrategy {
  public:
   struct CompactSnapshot {
     std::vector<BuildPrimaryOutputClauses::PathKey> inputs;
+    std::vector<BuildPrimaryOutputClauses::PathKey> boundaryInputs;
     std::vector<BuildPrimaryOutputClauses::PathKey> outputs;
     tbb::concurrent_vector<BoolExpr*> POs;
   };
@@ -35,6 +36,14 @@ class MiterStrategy {
 
   void setCnfDump(bool enabled, const std::string& path = "");
   void setPoCnfDump(bool enabled, const std::string& path = "");
+  void setAllowBoundaryMismatch(bool allow) { allowBoundaryMismatch_ = allow; }
+  void setBoundaryPairs(const BoundaryPairs& pairs) {
+    builder0_.setBoundaryPairs(pairs, 0);
+    builder1_.setBoundaryPairs(pairs, 1);
+  }
+
+  static std::string getActualLogFileName();
+  static void cleanupProcessState();
 
   size_t normalizeInputs(std::vector<naja::DNL::DNLID>& inputs0,
                        std::vector<naja::DNL::DNLID>& inputs1,
@@ -75,6 +84,7 @@ class MiterStrategy {
   std::string dumpCnfPath_;
   bool dumpPoCnf_ = false;
   std::string dumpPoCnfPath_;
+  bool allowBoundaryMismatch_ = false;
 };
 
 }  // namespace KEPLER_FORMAL

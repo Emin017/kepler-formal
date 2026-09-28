@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -26,6 +26,21 @@ struct BoolExprCacheKey {
 class BoolExprCache {
  public:
   using Key = BoolExprCacheKey;
+
+  // An isolated cache for a synchronous embedding operation. Existing users
+  // retain the original global-cache behavior unless they opt into this scope.
+  // Callers must serialize all cache use for the lifetime of the scope.
+  class ScopedContext {
+   public:
+    ScopedContext();
+    ~ScopedContext();
+    ScopedContext(const ScopedContext&) = delete;
+    ScopedContext& operator=(const ScopedContext&) = delete;
+
+   private:
+    struct State;
+    std::unique_ptr<State> state_;
+  };
 
   // Lookup-or-create API
   static BoolExpr* getExpression(Key const& k);

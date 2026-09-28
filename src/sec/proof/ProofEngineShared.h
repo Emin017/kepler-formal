@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -28,7 +28,8 @@ std::unordered_map<size_t, size_t> allocateFreshProofSymbols(
 
 BoolExpr* buildOneStepTransitionFormula(
     const KInductionProblem& problem,
-    const std::unordered_map<size_t, size_t>& nextStateSymbols);
+    const std::unordered_map<size_t, size_t>& nextStateSymbols,
+    BoolExpr* certifiedStateConstraints = nullptr);
 
 BoolExpr* buildCurrentStateLegalityFormula(const KInductionProblem& problem);
 
@@ -53,17 +54,22 @@ BoolExpr* selectValidatedStrengtheningInvariant(
 bool invariantExcludesBadStates(
     const KInductionProblem& problem,
     BoolExpr* invariant,
-    KEPLER_FORMAL::Config::SolverType solverType);
+    KEPLER_FORMAL::Config::SolverType solverType,
+    BoolExpr* certifiedStateConstraints = nullptr);
 
+// Optional constraints must already be proved invariants of the original
+// transition system. Omission preserves the unconstrained proof query.
 bool isInductiveInvariant(
     const KInductionProblem& problem,
     BoolExpr* invariant,
-    KEPLER_FORMAL::Config::SolverType solverType);
+    KEPLER_FORMAL::Config::SolverType solverType,
+    BoolExpr* certifiedStateConstraints = nullptr);
 
 bool isInductiveInvariant(
     const KInductionProblem& problem,
     BoolExpr* invariant,
     KEPLER_FORMAL::Config::SolverType solverType,
-    FormulaSupportCache& supportCache);
+    FormulaSupportCache& supportCache,
+    BoolExpr* certifiedStateConstraints = nullptr);
 
 }  // namespace KEPLER_FORMAL::SEC

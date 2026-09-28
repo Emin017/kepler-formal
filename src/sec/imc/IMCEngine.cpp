@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #include "imc/IMCEngine.h"
 
@@ -560,6 +560,12 @@ bool isStateReachableAtDepth(const KInductionProblem& problem,
   FrameVariableStore variables(solver, problem.allSymbols, depth + 1);
   addComplementedStateRelations(solver, variables, problem.complementedStatePairs0, depth + 1);
   addComplementedStateRelations(solver, variables, problem.complementedStatePairs1, depth + 1);
+  if (problem.learnedInternalRelationInvariant != nullptr) {
+    for (size_t frame = 0; frame <= depth; ++frame) {
+      FrameFormulaEncoder encoder(solver, variables.makeLeafLits(frame));
+      solver.addClause({encoder.encode(problem.learnedInternalRelationInvariant)});
+    }
+  }
   for (size_t frame = 0; frame < depth; ++frame) {
     addTransitionRelation(solver, variables, problem, frame);
   }
@@ -647,8 +653,10 @@ bool provesImcInvariant(const KInductionProblem& problem,
                         BoolExpr* invariant) {
   return invariant != nullptr &&
          initialFrontierImplies(initFormula, invariant, solverType) &&
-         isInductiveInvariant(problem, invariant, solverType) &&
-         invariantExcludesBadStates(problem, invariant, solverType);
+         isInductiveInvariant(problem, invariant, solverType,
+                              problem.learnedInternalRelationInvariant) &&
+         invariantExcludesBadStates(problem, invariant, solverType,
+                                   problem.learnedInternalRelationInvariant);
 }
 
 std::optional<IMCResult> findImcCounterexample(const ImcBaseCounterexampleCache& cache,
@@ -812,14 +820,21 @@ CraigImcResult runCraigCheckerAttempt(
   return checker.run(maxK);
 }
 
-IMCResult makeCraigInconclusiveResult(
-    size_t bound,
-    size_t firstUnprovenOutput) {
+IMCResult makeCraigInconclusiveResult(size_t bound) {
   IMCResult result;
   result.status = IMCStatus::Inconclusive;
   result.bound = bound;
-  result.firstUnprovenOutput = firstUnprovenOutput;
   return result;
+}
+
+void markCraigOutputRangeCovered(
+    std::vector<bool>& coveredOutputs,
+    size_t firstOutput,
+    size_t endOutput) {
+  const size_t boundedEnd = std::min(endOutput, coveredOutputs.size());
+  for (size_t output = firstOutput; output < boundedEnd; ++output) {
+    coveredOutputs[output] = true;
+  }
 }
 
 std::unordered_set<size_t> observedOutputSupportForProbe(
@@ -935,7 +950,8 @@ IMCResult runCraigOutputRange(
     const CraigOutputSupportCache& supportCache,
     CraigTrackedSeedScope seedScope,
     ReusableCraigInvariant& reusableInvariant,
-    ReusableCraigInvariant& smallRawSingletonInvariant) {
+    ReusableCraigInvariant& smallRawSingletonInvariant,
+    std::vector<bool>& coveredOutputs) {
   KInductionProblem batchProblem = problem;
   configureOutputBatchProblem(
       batchProblem, problem, firstOutput, endOutput);
@@ -1020,6 +1036,7 @@ IMCResult runCraigOutputRange(
     emitSecDiag(
         "SEC diag: imc Craig reused invariant for output batch first=",
         firstOutput, " end=", endOutput);
+    markCraigOutputRangeCovered(coveredOutputs, firstOutput, endOutput);
     return {IMCStatus::Equivalent, activeReusableInvariant.proofBound};
   }
 
@@ -1082,6 +1099,7 @@ IMCResult runCraigOutputRange(
             " helper_regions=", proof.invariantRegions.size());
       }
     }
+    markCraigOutputRangeCovered(coveredOutputs, firstOutput, endOutput);
     return {IMCStatus::Equivalent, proof.iterations};
   }
   if (proof.status == CraigImcStatus::CounterexampleCandidate) {
@@ -1094,7 +1112,7 @@ IMCResult runCraigOutputRange(
         counterexample.has_value()) { // LCOV_EXCL_LINE
       return *counterexample; // LCOV_EXCL_LINE
     }
-    return makeCraigInconclusiveResult(maxK, firstOutput); // LCOV_EXCL_LINE
+    return makeCraigInconclusiveResult(maxK); // LCOV_EXCL_LINE
   } // LCOV_EXCL_LINE
   if (proof.status == CraigImcStatus::BudgetExceeded) {
     if (multiOutputRange) {
@@ -1120,7 +1138,8 @@ IMCResult runCraigOutputRange(
         supportCache,
         CraigTrackedSeedScope::LocalRange,
         reusableInvariant,
-        smallRawSingletonInvariant);
+        smallRawSingletonInvariant,
+        coveredOutputs);
     const IMCResult right = runCraigOutputRange(
         problem,
         solverType,
@@ -1130,7 +1149,8 @@ IMCResult runCraigOutputRange(
         supportCache,
         CraigTrackedSeedScope::LocalRange,
         reusableInvariant,
-        smallRawSingletonInvariant);
+        smallRawSingletonInvariant,
+        coveredOutputs);
     if (left.status == IMCStatus::Different) {
       return left; // LCOV_EXCL_LINE
     }
@@ -1147,7 +1167,7 @@ IMCResult runCraigOutputRange(
         right.status == IMCStatus::Equivalent) { // LCOV_EXCL_LINE
       return {IMCStatus::Equivalent, std::max(left.bound, right.bound)}; // LCOV_EXCL_LINE
     }
-    return makeCraigInconclusiveResult(maxK, firstOutput); // LCOV_EXCL_LINE
+    return makeCraigInconclusiveResult(maxK); // LCOV_EXCL_LINE
   }
 
   if (proof.status == CraigImcStatus::ConcreteNoProgress) {
@@ -1161,7 +1181,7 @@ IMCResult runCraigOutputRange(
         counterexample.has_value()) { // LCOV_EXCL_LINE
       return *counterexample; // LCOV_EXCL_LINE
     }
-    return makeCraigInconclusiveResult(maxK, firstOutput); // LCOV_EXCL_LINE
+    return makeCraigInconclusiveResult(maxK); // LCOV_EXCL_LINE
   }
   if (proof.status == CraigImcStatus::BudgetExceeded) {
     if (const auto counterexample =
@@ -1170,7 +1190,7 @@ IMCResult runCraigOutputRange(
         counterexample.has_value()) {
       return *counterexample; // LCOV_EXCL_LINE
     }
-    return makeCraigInconclusiveResult(proof.iterations, firstOutput);
+    return makeCraigInconclusiveResult(proof.iterations);
   }
 
   // Partial or implicit initial frontiers are over-approximations. Do not turn
@@ -1186,7 +1206,7 @@ IMCResult runCraigOutputRange(
       counterexample.has_value()) {
     return *counterexample;
   }
-  return makeCraigInconclusiveResult(checkedDepth, firstOutput);
+  return makeCraigInconclusiveResult(checkedDepth);
 }
 
 IMCResult runLargeDualRailCraigImc(
@@ -1203,6 +1223,8 @@ IMCResult runLargeDualRailCraigImc(
   const auto batches = buildLargeDualRailCraigImcOutputBatchPlans(
       supportCache, kLargeDualRailCraigBatchingLimits);
   size_t proofBound = 0;
+  std::vector<bool> coveredOutputs(
+      problem.observedOutputExprs0.size(), false);
   ReusableCraigInvariant reusableInvariant;
   ReusableCraigInvariant smallRawSingletonInvariant;
   for (const CraigOutputBatchPlan& batchPlan : batches) {
@@ -1215,30 +1237,31 @@ IMCResult runLargeDualRailCraigImc(
         supportCache,
         CraigTrackedSeedScope::SharedReusableSurface,
         reusableInvariant,
-        smallRawSingletonInvariant);
+        smallRawSingletonInvariant,
+        coveredOutputs);
     if (batchResult.status == IMCStatus::Different) {
       return batchResult;
     }
     if (batchResult.status == IMCStatus::Inconclusive) {
-      // Once any output slice exhausts the strict Craig budgets, the whole
-      // equivalence proof is already inconclusive. Stop here instead of
-      // rebuilding BP-sized bounded-transition probes for unrelated later
-      // outputs. The large-dual-rail startup witness probe already catches
-      // cheap concrete edits before proof batching; deeper, unattempted output
-      // slices remain inconclusive rather than being reported safe.
+      // Keep proofs already found by recursive splitting, but retain the
+      // existing global work bound for unrelated later output batches.
       const size_t checkedDepth =
           boundedCraigWitnessDepth(maxK, batchResult.bound);
       emitSecDiag(
           "SEC diag: imc Craig stopping after inconclusive output batch first=",
           batchPlan.firstOutput, " end=", batchPlan.endOutput);
-      return makeCraigInconclusiveResult(
-          checkedDepth,
-          batchResult.firstUnprovenOutput.value_or(batchPlan.firstOutput));
+      IMCResult result = makeCraigInconclusiveResult(checkedDepth);
+      result.coveredOutputs = std::move(coveredOutputs);
+      return result;
     } else {
       proofBound = std::max(proofBound, batchResult.bound);
     }
   }
-  return IMCResult{IMCStatus::Equivalent, proofBound};
+  IMCResult result;
+  result.status = IMCStatus::Equivalent;
+  result.bound = proofBound;
+  result.coveredOutputs = std::move(coveredOutputs);
+  return result;
 }
 
 bool shouldBuildExplicitImcInitFormula(const KInductionProblem& problem) {
@@ -1383,6 +1406,9 @@ IMCResult IMCEngine::run(size_t maxK) const {
   BoolExpr* initFormula =
       shouldBuildExplicitImcInitFormula(problem_) ? buildProofInitFormula(problem_)
                                                   : nullptr;
+  if (initFormula != nullptr && problem_.learnedInternalRelationInvariant != nullptr) {
+    initFormula = BoolExpr::And(initFormula, problem_.learnedInternalRelationInvariant);
+  }
   const BoolExpr* sharedStrengthening =
       buildInitialImcStrengthening(problem_, solverType_, initFormula);
   if (initFormula != nullptr &&

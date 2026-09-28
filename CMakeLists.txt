@@ -1,5 +1,5 @@
 # Copyright 2024-2025 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.21)
 # tell CMake to pretend any cmake_minimum_required(VERSION X) with X<3.5
@@ -14,10 +14,51 @@ set(NAJA_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja)
 
 message(STATUS "CMake version: ${CMAKE_VERSION}")
 
+set(kepler_version_template "${CMAKE_CURRENT_SOURCE_DIR}/src/bin/KeplerVersion.h.in")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${kepler_version_template}")
+file(STRINGS "${kepler_version_template}" kepler_version_line
+  REGEX "KEPLER_VERSION.*\"[0-9]+\\.[0-9]+\\.[0-9]+\"")
+string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" KEPLER_VERSION "${kepler_version_line}")
+if(KEPLER_VERSION STREQUAL "")
+  message(FATAL_ERROR "Cannot read the version from ${kepler_version_template}")
+endif()
+
 project(kepler-formal
-  VERSION 1.0.0
+  VERSION ${KEPLER_VERSION}
   HOMEPAGE_URL https://github.com/keplertech/kepler-formal
 )
+
+include(GNUInstallDirs)
+
+if(WIN32)
+  # The vendored solvers use GNU C/C++ extensions. clang-cl supports those
+  # while retaining the MSVC ABI used by CPython and the vcpkg dependencies.
+  if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang"
+      OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+      OR NOT CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC"
+      OR NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+      OR NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    message(FATAL_ERROR
+      "Windows builds require clang-cl for both C and C++ (with the MSVC SDK)")
+  endif()
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
+  add_compile_options(/utf-8 "$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
+endif()
+
+option(BUILD_KEPLER_PYTHON "Build the Kepler Formal Python package" OFF)
+option(KEPLER_USE_PUBLISHED_NAJAEDA "Use the tested NajaEDA 0.7.24 wheel compatibility adapter" OFF)
+set(KEPLER_EXTERNAL_PIC_ARG "")
+if(BUILD_KEPLER_PYTHON)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+  set(KEPLER_EXTERNAL_PIC_ARG -fPIC)
+  # A Python build consumes the installed NajaEDA runtime. Standalone builds
+  # retain the vendored Naja build below and never depend on Python packages.
+  find_package(Python3 3.10...<3.99
+    COMPONENTS Interpreter Development.Module REQUIRED)
+  include(src/python/KeplerSharedNaja.cmake)
+endif()
 
 set(ARGPARSE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/naja/thirdparty/argparse-3.1/include)
 
@@ -73,6 +114,9 @@ string(JOIN " " CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS
     ${CADICAL_KITTEN_SYMBOL_PREFIX_DEFINES}
 )
 
+if(WIN32)
+  include(src/windows/KeplerWindowsSolvers.cmake)
+else()
 ExternalProject_Add(kissat_external
     SOURCE_DIR ${KISSAT_ROOT}
     # Keep Kissat small and quiet for embedded use, but do not use
@@ -83,7 +127,7 @@ ExternalProject_Add(kissat_external
     # deps/toolchain.cmake); kissat's configure defaults to host cc.
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         "CC=${CMAKE_C_COMPILER}"
-        ./configure --compact --quiet --no-proofs
+        ./configure --compact --quiet --no-proofs ${KEPLER_EXTERNAL_PIC_ARG}
     BUILD_COMMAND make
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 1
@@ -117,7 +161,7 @@ ExternalProject_Add(cadical_external
         "CXX=${CMAKE_CXX_COMPILER}"
         "CFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
         "CXXFLAGS=${CADICAL_KITTEN_SYMBOL_PREFIX_FLAGS}"
-        ./configure -q --no-tracing --no-contrib
+        ./configure -q --no-tracing --no-contrib ${KEPLER_EXTERNAL_PIC_ARG}
     BUILD_COMMAND make -C build libcadical.a
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 1
@@ -134,17 +178,22 @@ set_property(TARGET cadical PROPERTY INTERFACE_INCLUDE_DIRECTORIES
     ${CADICAL_ROOT}/contrib
 )
 add_dependencies(cadical cadical_external)
+endif()
 
 add_subdirectory(src)
 add_subdirectory(thirdparty)
 
+if(BUILD_KEPLER_PYTHON)
+  add_subdirectory(src/python)
+endif()
+
 if(TARGET slang_slang)
   # fmt 12 no longer exposes fmt::format through <fmt/core.h>. Keep vendored
   # slang sources untouched and provide the full formatting declarations here.
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(slang_slang PRIVATE -include fmt/format.h)
-  elseif(MSVC)
+  if(MSVC)
     target_compile_options(slang_slang PRIVATE /FIfmt/format.h)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(slang_slang PRIVATE -include fmt/format.h)
   endif()
 endif()
 
@@ -152,7 +201,11 @@ option(ENABLE_UNIT_TESTS "Enable unit tests" ON)
 if(ENABLE_UNIT_TESTS)
  include(CTest)
  enable_testing()
- add_subdirectory(test)
+ if(BUILD_KEPLER_PYTHON)
+   add_subdirectory(test/python)
+ else()
+   add_subdirectory(test)
+ endif()
 endif()
 
 option(KEPLER_STATIC "Statically link libstdc++, libgcc, and Cap'n Proto" OFF)

@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #include "BuildPrimaryOutputClauses.h"
 #include "DNL.h"
@@ -8,6 +8,7 @@
 #include "SNLLogicCloud.h"
 #include "Tree2BoolExpr.h"
 #include "SNLPath.h"
+#include "SNLRTLInfos.h"
 #include "NajaProperty.h"
 #include "../../config/Config.h"
 #include <algorithm>
@@ -183,6 +184,11 @@ void appendNetReport(std::ostream& out, const SNLBitNet* net) {
       << " is_constant1=" << (net->isConstant1() ? "true" : "false")
       << " model_is_assign=" << (net->getDesign()->isAssign() ? "true" : "false")
       << " properties=[";
+#ifdef KEPLER_NAJA_PROPERTIES_UNAVAILABLE
+  // NajaEDA 0.7.24's Windows wheel does not export getProperties(). Keep
+  // the remaining net diagnostics and distinguish unavailable from empty.
+  out << "unavailable";
+#else
   bool first = true;
   for (auto* property : net->getProperties()) {
     if (!first) {
@@ -191,6 +197,7 @@ void appendNetReport(std::ostream& out, const SNLBitNet* net) {
     first = false;
     out << property->getName() << "=" << property->getString();
   }
+#endif
   out << "]";
 }
 
@@ -247,8 +254,9 @@ bool containsDependencyBit(const std::vector<uint64_t>& deps, uint64_t orderID) 
 
 BuildPrimaryOutputClauses::SkippedOutputInfo makeSkippedOutputInfo(
     BuildPrimaryOutputClauses::SkippedOutputReason reason,
-    std::string detail) {
-  return {reason, std::move(detail)};
+    std::string detail,
+    DNLID opaqueTerm = DNLID_MAX) {
+  return {reason, std::move(detail), opaqueTerm};
 }
 
 void reportSkippedPO(const DNLFull* dnl,
@@ -303,6 +311,36 @@ void reportSkippedPO(const DNLFull* dnl,
 
 }  // namespace
 
+BuildPrimaryOutputClauses::SkippedOutputInfo
+BuildPrimaryOutputClauses::describeUnmappedTerm(
+    DNLID termID, std::string fallbackDetail) {
+  const auto& term = get()->getDNLTerminalFromID(termID);
+  if (term.getIsoID() == DNLID_MAX) {
+    return {SkippedOutputReason::NoDriver, std::move(fallbackDetail)};
+  }
+  const auto& iso = get()->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+  if (!iso.isConstantX() && !iso.isConstantZ()) {
+    return {SkippedOutputReason::NoDriver, std::move(fallbackDetail)};
+  }
+
+  const auto* instTerm = term.getSnlTerm();
+  const auto* rtlInfos = instTerm ? instTerm->getInstance()->getRTLInfos() : nullptr;
+  // Use the consuming instance: the constant net can be shared by literals
+  // from different source locations.
+  std::ostringstream detail;
+  detail << "unsupported " << (iso.isConstantX() ? "X constant (1'bx)" : "Z constant (1'bz)")
+         << " used at ";
+  appendTerminalName(detail, term);
+  if (rtlInfos && rtlInfos->hasSourceLoc()) {
+    const auto& loc = *rtlInfos->getSourceLoc();
+    detail << "; assignment/expression at " << loc.file.getString() << ":" << loc.line;
+    if (loc.column) detail << ":" << loc.column;
+  } else {
+    detail << "; source location unavailable";
+  }
+  return {SkippedOutputReason::UnknownConstant, detail.str()};
+}
+
 BuildPrimaryOutputClauses::PathNameIDs BuildPrimaryOutputClauses::getPathNameIDs(
     const DNLInstanceFull& instance) const {
   const auto instanceID = instance.getID();
@@ -339,6 +377,14 @@ BuildPrimaryOutputClauses::PathNameIDs BuildPrimaryOutputClauses::getPathNameIDs
 BuildPrimaryOutputClauses::PathKey
 BuildPrimaryOutputClauses::getTerminalPathKey(
     const DNLTerminalFull& terminal) const {
+  if (const auto* boundary = getLeafBoundary()) {
+    if (const auto* port = boundary->getPort(terminal.getID())) {
+      return {{PathComponentID{1} << 62,
+               static_cast<PathComponentID>(port->pairIndex),
+               static_cast<PathComponentID>(NLName(port->pinName).getID())},
+              {static_cast<NLID::DesignObjectID>(port->bit)}};
+    }
+  }
   auto pathIDs = getPathNameIDs(terminal.getDNLInstance());
   pathIDs.push_back(static_cast<PathComponentID>(
       terminal.getSnlBitTerm()->getName().getID()));
@@ -349,6 +395,7 @@ BuildPrimaryOutputClauses::getTerminalPathKey(
 
 std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   std::vector<DNLID> inputs;
+  if (const auto* boundary = getLeafBoundary()) inputs = boundary->getInputs();
   auto dnl = get();
   DNLInstanceFull top = dnl->getTop();
 
@@ -364,6 +411,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
   }
 
   for (DNLID leaf : dnl->getLeaves()) {
+    if (getLeafBoundary() && getLeafBoundary()->containsInstance(leaf)) continue;
     auto iter = modelCache_.find(dnl->getDNLInstanceFromID(leaf).getSNLModel());
     const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     if ((iter != modelCache_.end()) && iter->second.analyzedPIs) {
@@ -453,8 +501,8 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
         const DNLTerminalFull& term = dnl->getDNLTerminalFromID(termId);
         if (term.getSnlBitTerm()->getDirection() !=
             SNLBitTerm::Direction::Input) {
-          const auto tt = SNLDesignModeling::getTruthTable(term.getSnlBitTerm()->getDesign(), 
-              term.getSnlBitTerm()->getOrderID());
+          const auto tt = SNLDesignModeling::getTruthTable(
+              instance.getSNLInstance(), term.getSnlBitTerm()->getOrderID());
           if (!tt.isInitialized()) {
             assert(termId < naja::DNL::get()->getDNLTerms().size());
             inputs.emplace_back(termId);
@@ -517,6 +565,9 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectInputs() {
 std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
   std::vector<DNLID> outputs;
   std::set<DNLID> outputsSet;
+  if (const auto* boundary = getLeafBoundary()) {
+    outputsSet.insert(boundary->getOutputs().begin(), boundary->getOutputs().end());
+  }
   skippedOutputs_.clear();
   auto dnl = get();
   DNLInstanceFull top = dnl->getTop();
@@ -533,6 +584,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
     }
   }
   for (DNLID leaf : dnl->getLeaves()) {
+    if (getLeafBoundary() && getLeafBoundary()->containsInstance(leaf)) continue;
     const DNLInstanceFull& instance = dnl->getDNLInstanceFromID(leaf);
     auto iter = modelCache_.find(instance.getSNLModel());
     if ((iter != modelCache_.end()) && iter->second.analyzedPOs) {
@@ -660,12 +712,14 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
                     .c_str());
       continue;
     }
-    if (term.getIsoID() != DNLID_MAX && 
-      dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).getDrivers().empty()) {
-      skippedOutputs_[out] = makeSkippedOutputInfo(
-          SkippedOutputReason::NoDriver, "its iso has no drivers");
+    const auto& iso =
+        dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID());
+    if (!iso.isConstant0() && !iso.isConstant1() &&
+        iso.getDrivers().empty()) {
+      const auto skip = describeUnmappedTerm(out, "its iso has no drivers");
+      skippedOutputs_[out] = skip;
       reportSkippedPO(
-          dnl, term, "its iso has no drivers", kSkippedNoDriverPOReport);
+          dnl, term, skip.detail.c_str(), kSkippedNoDriverPOReport);
       DEBUG_LOG("Skipping output %s of model %s as it is not connected to any net\n",
                 term.getSnlBitTerm()->getName().getString().c_str(),
                 term.getSnlBitTerm()
@@ -675,8 +729,7 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
                     .c_str());
       continue;
     }
-    if (term.getIsoID() != DNLID_MAX && 
-      dnl->getDNLIsoDB().getIsoFromIsoIDconst(term.getIsoID()).getDrivers().size() > 1) {
+    if (iso.getDrivers().size() > 1) {
       skippedOutputs_[out] = makeSkippedOutputInfo(
           SkippedOutputReason::MultiDriver, "its iso has multiple drivers");
       reportSkippedPO(
@@ -699,6 +752,11 @@ std::vector<DNLID> BuildPrimaryOutputClauses::collectOutputs() {
 }
 
 void BuildPrimaryOutputClauses::collect() {
+  leafBoundary_.reset();
+  if (!boundaryPairs_.empty()) {
+    leafBoundary_ = std::make_unique<LeafBoundary>(
+        *get(), boundaryPairs_, boundarySide_);
+  }
   inputs_ = collectInputs();
   for (const auto& input : inputs_) {
     PathKey key = getTerminalPathKey(naja::DNL::get()->getDNLTerminalFromID(input));
@@ -720,16 +778,30 @@ void BuildPrimaryOutputClauses::collect() {
   POs_.resize(outputs_.size());
 }
 
+std::vector<BuildPrimaryOutputClauses::PathKey>
+BuildPrimaryOutputClauses::getLecBoundaryInputs() const {
+  std::vector<PathKey> boundaries;
+  for (const auto& [path, input] : inputsMap_) {
+    const auto& term = get()->getDNLTerminalFromID(input);
+    if (term.isTopPort() || (getLeafBoundary() && getLeafBoundary()->isInput(input)) ||
+        !SNLDesignModeling::getOutputRelatedClocks(term.getSnlBitTerm()).empty()) {
+      boundaries.emplace_back(path);
+    }
+  }
+  return boundaries;
+}
+
 void BuildPrimaryOutputClauses::initVarNames() {
   termDNLID2varID_.resize(naja::DNL::get()->getDNLTerms().size(), (size_t)-1);
   for (size_t i = 0; i < inputs_.size(); ++i) {
     // Get Truth Table for terminal
     const DNLTerminalFull& tTerm = naja::DNL::get()->getDNLTerminalFromID(inputs_[i]);
     // If direction is input, skip
-    if (!tTerm.isTopPort() &&
+    if (!(getLeafBoundary() && getLeafBoundary()->isInput(inputs_[i])) && !tTerm.isTopPort() &&
         tTerm.getSnlBitTerm()->getDirection() != SNLBitTerm::Direction::Input) {
-      const auto tt = SNLDesignModeling::getTruthTable(tTerm.getSnlBitTerm()->getDesign(), 
-      tTerm.getSnlBitTerm()->getOrderID());
+      const auto tt = SNLDesignModeling::getTruthTable(
+          tTerm.getDNLInstance().getSNLInstance(),
+          tTerm.getSnlBitTerm()->getOrderID());
       if (tt.isInitialized()) {
         if (tt.all0()) {
           termDNLID2varID_[inputs_[i]] = 0;
@@ -800,7 +872,6 @@ void BuildPrimaryOutputClauses::build() {
     // LCOV_EXCL_STOP
     IsPOs_[po] = true;
   }
-
   std::vector<size_t> representativeForOutput(outputs_.size());
   std::vector<size_t> representativeOutputs;
   representativeOutputs.reserve(outputs_.size());
@@ -834,6 +905,17 @@ void BuildPrimaryOutputClauses::build() {
 
     DNLID isoID = get()->getDNLTerminalFromID(out).getIsoID();
     DEBUG_LOG("isoID: %zu\n", isoID);
+    if (isoID != DNLID_MAX) {
+      const auto& iso = get()->getDNLIsoDB().getIsoFromIsoIDconst(isoID);
+      if (iso.isConstant0()) {
+        POs_[i] = BoolExpr::createFalse();
+        return;
+      }
+      if (iso.isConstant1()) {
+        POs_[i] = BoolExpr::createTrue();
+        return;
+      }
+    }
     auto cachedIt = Tree2BoolExpr::iso2boolExpr_.find(isoID);
     if (isoID != DNLID_MAX &&
         cachedIt != Tree2BoolExpr::iso2boolExpr_.end() &&
@@ -855,7 +937,11 @@ void BuildPrimaryOutputClauses::build() {
       return;
     }
     
-    SNLLogicCloud cloud(out, IsPIs_, IsPOs_);
+    SNLLogicCloud cloud(
+        out,
+        IsPIs_,
+        IsPOs_,
+        stopAtOpaqueInternalOutputs_);
     #ifdef DEBUG_CHECKS
     auto startComp = std::chrono::steady_clock::now();
     #endif
@@ -915,21 +1001,20 @@ void BuildPrimaryOutputClauses::build() {
       if (unmappedInput != DNLID_MAX) {
         // LCOV_DISABLED_START
         POs_[i] = BoolExpr::createInvalid();
-        std::ostringstream detail;
-        detail << "encountered internal frontier term "
-               << unmappedInput
-               << " that was not collected as a primary input";
+        const auto skip = describeUnmappedTerm(
+            unmappedInput, "encountered internal frontier term " +
+                std::to_string(unmappedInput) +
+                " that was not collected as a primary input");
                // LCOV_DISABLED_STOP
         {
           // LCOV_DISABLED_START
           std::lock_guard<std::mutex> lock(skippedOutputsMutex_);
-          skippedOutputs_[out] = makeSkippedOutputInfo(
-              SkippedOutputReason::NoDriver, detail.str());
+          skippedOutputs_[out] = skip;
         }
         reportSkippedPO(
             get(),
             get()->getDNLTerminalFromID(out),
-            detail.str().c_str(),
+            skip.detail.c_str(),
             kSkippedNoDriverPOReport);
       }
       // LCOV_DISABLED_STOP
@@ -958,6 +1043,9 @@ void BuildPrimaryOutputClauses::build() {
         case SNLLogicCloud::SkipReason::LogicalLoop:
           skipReason = SkippedOutputReason::LogicalLoop;
           break;
+        case SNLLogicCloud::SkipReason::OpaqueInternal:
+          skipReason = SkippedOutputReason::OpaqueInternal;
+          break;
         // LCOV_EXCL_START
         case SNLLogicCloud::SkipReason::None:  // LCOV_EXCL_LINE
         // LCOV_EXCL_STOP
@@ -969,7 +1057,11 @@ void BuildPrimaryOutputClauses::build() {
       if (skipReason != SkippedOutputReason::None) {
         std::lock_guard<std::mutex> lock(skippedOutputsMutex_);
         skippedOutputs_[out] = makeSkippedOutputInfo(
-            skipReason, cloud.getSkipReasonText());
+            skipReason,
+            cloud.getSkipReasonText(),
+            skipReason == SkippedOutputReason::OpaqueInternal
+                ? cloud.getOpaqueInternalTerm()
+                : DNLID_MAX);
       }
     }
     #ifdef DEBUG_CHECKS
@@ -1041,27 +1133,13 @@ void BuildPrimaryOutputClauses::setInputs2InputsIDs() {
       throw std::runtime_error("Input terminal is null");  // LCOV_EXCL_LINE
       // LCOV_EXCL_STOP
     }
-    const DNLInstanceFull& currentInstance =
-        get()->getDNLTerminalFromID(input).getDNLInstance();
-    PathKey& pair = inputs2inputsIDs_[input];
-    pair.first = getPathNameIDs(currentInstance);
-    pair.first.emplace_back(
-        get()->getDNLTerminalFromID(input).getSnlBitTerm()->getName().getID());
-    pair.second.emplace_back(
-        get()->getDNLTerminalFromID(input).getSnlBitTerm()->getBit());
+    inputs2inputsIDs_[input] = getTerminalPathKey(get()->getDNLTerminalFromID(input));
   }
 }
 
 void BuildPrimaryOutputClauses::setOutputs2OutputsIDs() {
   outputs2outputsIDs_.clear();
   for (const auto& output : outputs_) {
-    const DNLInstanceFull& currentInstance =
-        get()->getDNLTerminalFromID(output).getDNLInstance();
-    PathKey& pair = outputs2outputsIDs_[output];
-    pair.first = getPathNameIDs(currentInstance);
-    pair.first.emplace_back(
-        get()->getDNLTerminalFromID(output).getSnlBitTerm()->getName().getID());
-    pair.second.emplace_back(
-        get()->getDNLTerminalFromID(output).getSnlBitTerm()->getBit());
+    outputs2outputsIDs_[output] = getTerminalPathKey(get()->getDNLTerminalFromID(output));
   }
 }

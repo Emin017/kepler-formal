@@ -16,6 +16,7 @@ The SEC-specific flag surface is documented separately in
 | `lec` | Gate-level combinational equivalence checking | Verilog or Naja IF netlists plus Liberty/Python primitive libraries as needed. |
 | `sec` | Gate-level sequential equivalence checking | Sequential Verilog/SystemVerilog netlists plus Liberty/Python primitive libraries as needed. |
 | `sec` | RTL-level sequential equivalence checking | RTL Verilog/SystemVerilog sources, including SystemVerilog flists with explicit tops. |
+| `sec` | SystemVerilog-to-Verilog RTL-vs-gate checking (`sv2v`) | SystemVerilog design 1 and Verilog design 2, plus Liberty/Python primitive libraries as needed. |
 
 LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 `verification: sec` in YAML.
@@ -24,18 +25,33 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 
 | Flag | Meaning |
 | --- | --- |
+| `--verification <lec\|sec>`, `-v <lec\|sec>` | Select LEC or SEC. Defaults to `lec`. |
+| `--max-k <n>`, `-k <n>` | Set the SEC proof/search bound. Defaults to `32`; SEC only. |
+| `--sec-engine <k_induction\|imc\|pdr>` | Select the SEC engine. Defaults to `pdr`; SEC only. |
+| `--sec-encoding <binary\|dual_rail_steady>` | Select the SEC encoding. Defaults to `dual_rail_steady`; SEC only. |
+| `--learn-internal-relations <bool>` | Learn certified internal register relations. Defaults to `true`; SEC only. |
+| `--allow-x-equality-in-internal-relations <bool>` | Permit X/X in internal relations only. Defaults to `true`; SEC only. |
+| `--sec-reset-cycles <n>` | Hold user-listed reset ports active for `n` SEC cycles; SEC only. |
+| `--sec-reset-port <name=0\|1>` | Add a top-level reset port asserted value. Repeat for multiple reset ports; SEC only. |
+| `--dump-btor2 <file>` | Write the prepared SEC equivalence obligation as BTOR2 before solving; SEC only. See [BTOR2 export](btor2-export.md). |
+| `--dump-only` | Stop after successful BTOR2 export; requires `--dump-btor2`. Exit code `0` indicates export success, without a proof verdict. |
+| `--allow-boundary-mismatch` | Allow LEC to continue when top-level inputs or sequential-element outputs do not match by name. Without this flag, a mismatch stops the run before SAT solving. LEC only. |
+| `--set-as-boundary <design1-path> <design2-path>` | Treat the paired leaf instances as a proof boundary. Repeat the flag for multiple instance pairs. The compatibility alias `--set_as_boundary` is also accepted. |
 | `-verilog` | Use Verilog Format. |
-| `-systemverilog`, `-sv` | Use SystemVerilog format. |
 | `-naja_if` | Use naja-if format. |
 | `-systemverilog`, `-sv` | Use SystemVerilog format for both designs. Requires SEC verification. |
 | `-sv2v` | Use mixed SystemVerilog-to-Verilog format for SEC RTL-vs-gate comparison: design 1 is parsed as SystemVerilog, design 2 is parsed as Verilog. |
 | `--help`, `-h` | Print usage and exit. |
-| `--config <file>`, `-c <file>` | Load a YAML config file. If present anywhere on the CLI, YAML parsing takes precedence over the rest of the arguments. |
+| `--version`, `-V` | Print the embedded Kepler Formal and Naja versions and Git hashes to stdout and exit successfully. Use as a standalone option. |
+| `--config <file>`, `-c <file>` | Load a YAML config file. Config mode cannot be combined with other command-line options. |
 | `--design1 <file...>` | Explicit source list for design 1 in multi-file Verilog mode. |
 | `--design2 <file...>` | Explicit source list for design 2 in multi-file Verilog mode. |
 | `--liberty <file...>`, `--lib <file...>` | Liberty library files. |
 | `--verilog_preprocessing` | Enable preprocessing for Verilog inputs. |
-| `--compact` | Per-PO analysis is skipped in case the design is different. |
+| `--sv_design1_flist <file>`, `--sv_design2_flist <file>` | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
+| `--sv_design1_top <top>`, `--sv_design2_top <top>` | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
+| `--verilog_design1_top <top>`, `--verilog_design2_top <top>` | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
+| `--compact` | Reduce peak memory. In SEC, extract and release design 1 before loading design 2. |
 | `--report-skipped-pos` | Emit skipped-PO reports in the current working directory. |
 
 ## YAML config flags
@@ -43,6 +59,18 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | Key | Type | Meaning |
 | --- | --- | --- |
 | `format` | string | Input format: `verilog`, `v`, `naja_if`, `systemverilog`, `sv`, or `sv2v`. If omitted, the implementation defaults to `verilog`. |
+| `verification` | string | `lec` or `sec`. Defaults to `lec`. |
+| `max_k` | integer | SEC proof/search bound. Defaults to `32`. |
+| `sec_engine` | string | `k_induction`, `imc`, or `pdr`. Defaults to `pdr`. |
+| `sec_encoding` | string | `binary` or `dual_rail_steady`. Defaults to `dual_rail_steady`. |
+| `learn_internal_relations` | bool | Learn certified internal register relations. Defaults to `true`. Alias: `learn_ineternal_relations`. |
+| `allow_x_equality_in_internal_relations` | bool | Permit X/X in internal relations only. Defaults to `true`; never relaxes final output equality. |
+| `sec_reset` | map | Optional SEC reset bootstrap. See [sec-reset-bootstrap.md](sec-reset-bootstrap.md). |
+| `btor2_export` | bool | Enable SEC BTOR2 export before solving. Defaults to `false`. |
+| `btor2_export_path` | string | Non-empty BTOR2 output path. Defaults to `miter.btor2` when enabled; requires `btor2_export: true`. |
+| `dump_only` | bool | Stop after BTOR2 export without running a proof engine. Defaults to `false`; requires `btor2_export: true`. |
+| `allow-boundary-mismatch` | bool | Allow an LEC boundary mismatch. Defaults to `false`; ignored for SEC. |
+| `set_as_boundary` | list[list[string, string]] | Paired, top-relative instance paths to turn into proof boundaries, for example `[[u_core/u_mem, u_core/u_mem_impl]]`. |
 | `input_paths` | list | Required for normal runs. Accepts either `[design0, design1]` or `[[design0_file...], [design1_file...]]`. The nested form is for multi-file Verilog. |
 | `liberty_files` | list[string] | Liberty libraries loaded through `SNLLibertyConstructor`. |
 | `py_tech_files` | list[string] | Python primitive loaders loaded through `SNLPyLoader`. |
@@ -57,12 +85,16 @@ LEC is the default. Select SEC with `-v sec`, `--verification sec`, or
 | `po_cnf_export_path` | string | Output directory for per-PO CNF export. Defaults to `po_cnfs`, or `po_cnfs_<scope>` in scoped `naja_if` mode. |
 | `compact_mode` | bool | Same behavior as `--compact`. |
 | `report_skipped_pos` | bool | Same behavior as `--report-skipped-pos`. |
-| `solver` | string | SAT solver selection. Supported values: `kissat`, `glucose`. If omitted, the implementation defaults to `kissat`. |
+| `sv_design1_flist`, `sv_design2_flist` | string | Per-design SystemVerilog file lists. Only design 1 is valid in `sv2v` mode. |
+| `sv_design1_top`, `sv_design2_top` | string | Per-design SystemVerilog top modules. Only design 1 is valid in `sv2v` mode. |
+| `verilog_design1_top`, `verilog_design2_top` | string | Per-design Verilog top modules. Only design 2 is valid in `sv2v` mode. |
+| `solver` | string | SAT solver selection: `kissat`, `glucose`, or `cadical`. Defaults to `kissat`. |
 
 Example:
 
 ```yaml
 format: verilog
+verification: lec
 input_paths:
   - [design0_part1.v, design0_part2.v]
   - [design1_part1.v, design1_part2.v]
@@ -79,4 +111,69 @@ cnf_export: true
 cnf_export_path: ./miter.cnf
 po_cnf_export: true
 po_cnf_export_path: ./po_cnfs
+```
+
+SEC `sv2v` example:
+
+```yaml
+format: sv2v
+verification: sec
+max_k: 32
+sec_engine: pdr
+sec_encoding: dual_rail_steady
+input_paths:
+  - [rtl_pkg.sv, rtl_top.sv]
+  - [gate_top.v]
+liberty_files:
+  - stdcells.lib
+solver: kissat
+compact_mode: true
+report_skipped_pos: true
+```
+
+## User-defined instance boundaries
+
+`--set-as-boundary` removes a selected instance from the proof obligation while
+keeping the surrounding logic visible. Paths are slash-separated and relative
+to each design's selected top. Pair entries may use different paths when the
+corresponding instances have different names or hierarchy in the two designs:
+
+```sh
+kepler-formal -verilog design0.v design1.v \
+  --set-as-boundary u_core/u_mem u_core/u_mem_impl \
+  --set-as-boundary u_io/u_phy u_io/u_phy_gate
+```
+
+Only leaf instances are supported: each selected instance's model must have no
+child instances. A hierarchical path such as `u_core/u_mem` is valid when its
+target is a leaf; selecting the nonleaf `u_core` itself is rejected. Leaf status
+is determined after loading/elaboration, not from the source module's name.
+
+For each selected instance, input pins act as additional compared outputs.
+This proves that both surrounding designs drive the abstracted block the same
+way. Output pins act as additional shared inputs, so the proof considers
+all possible values produced by the abstracted block without checking its
+implementation. Original top-level ports and all logic outside the selected
+instances remain part of the normal equivalence result. These are logical
+verification boundaries: no netlist instances, ports, or connections are changed.
+
+The two sides must expose matching pin names, bit ranges, and directions at
+each paired boundary. Instance input pins must be connected, and nonconstant
+input nets must have exactly one driver; unused output pins are allowed.
+Inout pins, aliased, constant-connected or multiply driven output nets,
+duplicate paths, and selections where one path is an ancestor of another are
+rejected. This includes direct internal constant-wire ties; a constant truth
+table in a primitive model is supported.
+Kepler Formal validates these conditions before starting the proof. Boundary
+selection supports both LEC and SEC, including compact mode, and all input
+formats (`v`, `sv`, and `sv2v`; SV formats require SEC). Paths use elaborated
+instance names, which can differ from source names for generated SV scopes.
+Boundary selection cannot currently be combined with `use_scopes` or `clean_scopes`.
+
+The equivalent YAML form is:
+
+```yaml
+set_as_boundary:
+  - [u_core/u_mem, u_core/u_mem_impl]
+  - [u_io/u_phy, u_io/u_phy_gate]
 ```

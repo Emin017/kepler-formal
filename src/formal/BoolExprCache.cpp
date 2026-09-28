@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #include "BoolExprCache.h"
 #include <tbb/concurrent_unordered_map.h>
@@ -67,6 +67,35 @@ BoolExprCache::Impl& BoolExprCache::impl() {
   // and long-lived embedding flows still use destroy() for explicit cleanup.
   static Impl* instance = new Impl();
   return *instance;
+}
+
+struct BoolExprCache::ScopedContext::State {
+  SingleMap table;
+  size_t lastID;
+  size_t numQuaries;
+  size_t numMiss;
+  size_t numHit;
+};
+
+BoolExprCache::ScopedContext::ScopedContext() : state_(new State()) {
+  // Complete allocation before taking ownership of any pre-existing cache.
+  auto& table = BoolExprCache::impl().table;
+  table.swap(state_->table);
+  state_->lastID = lastID_.exchange(1, std::memory_order_relaxed);
+  state_->numQuaries = numQuaries_;
+  state_->numMiss = numMiss_;
+  state_->numHit = numHit_;
+  numQuaries_ = numMiss_ = numHit_ = 0;
+}
+
+BoolExprCache::ScopedContext::~ScopedContext() {
+  auto& table = BoolExprCache::impl().table;
+  table.clear();
+  table.swap(state_->table);
+  lastID_.store(state_->lastID, std::memory_order_relaxed);
+  numQuaries_ = state_->numQuaries;
+  numMiss_ = state_->numMiss;
+  numHit_ = state_->numHit;
 }
 
 static inline TupleKey make_tuple_key(Op op,

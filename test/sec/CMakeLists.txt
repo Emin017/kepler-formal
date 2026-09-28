@@ -1,7 +1,10 @@
 # Copyright 2024-2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
-add_executable(secStrategyTests SequentialEquivalenceStrategyTests.cpp)
+add_executable(secStrategyTests
+    InternalRelationsTests.cpp
+    SequentialEquivalenceStrategyTests.cpp
+    Btor2ExportStrategyTests.cpp)
 set_target_properties(secStrategyTests PROPERTIES INTERPROCEDURAL_OPTIMIZATION FALSE)
 # Keep the very large SEC test translation unit out of LTO, but do not disable
 # LTO for the final executable link: CI builds GoogleTest with global -flto, and
@@ -28,3 +31,21 @@ else()
 endif()
 
 GTEST_DISCOVER_TESTS(secStrategyTests)
+
+add_executable(BoundaryEquivalenceTests BoundaryEquivalenceTests.cpp)
+target_link_libraries(BoundaryEquivalenceTests
+    kepler_sec kepler_formal_utils GTest::gtest_main)
+GTEST_DISCOVER_TESTS(BoundaryEquivalenceTests)
+
+add_executable(SecBtor2ExporterTests
+    SecBtor2ExporterTests.cpp
+    SecBtor2ExportValidationTests.cpp)
+target_link_libraries(SecBtor2ExporterTests kepler_sec GTest::gtest_main)
+GTEST_DISCOVER_TESTS(SecBtor2ExporterTests)
+
+add_test(
+    NAME SecRegressHelperTests.PartialProofExpectationModes
+    COMMAND bash
+            ${CMAKE_CURRENT_SOURCE_DIR}/RunSecStrategiesRegressTests.sh
+            ${PROJECT_SOURCE_DIR}/regress/run_sec_strategies_regress.sh
+)

@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -9,6 +9,9 @@
 #include <vector>
 
 #include "../../config/Config.h"
+#include "../../utils/DesignBoundary.h"
+#include "export/Btor2ExportOptions.h"
+#include "proof/InternalRelations.h"
 
 namespace naja::NL {
 class SNLDesign;
@@ -29,9 +32,25 @@ enum class SecEncoding {
 
 enum class SequentialEquivalenceStatus {
   Equivalent,
+  PartiallyProved,
   Different,
   Inconclusive,
   Unsupported,
+  Exported,
+};
+
+struct SecResetPortSpec {
+  std::string name;
+  bool activeValue = true;
+};
+
+struct SecResetSpec {
+  size_t cycles = 0;
+  std::vector<SecResetPortSpec> ports;
+
+  bool enabled() const {
+    return cycles != 0 && !ports.empty();
+  }
 };
 
 struct ExtractedBoundaryReportEntry {  // LCOV_EXCL_LINE
@@ -63,7 +82,7 @@ struct SequentialEquivalenceResult {  // LCOV_EXCL_LINE
   std::vector<std::string> skippedObservedOutputs;
   std::vector<std::string> resetUnanchoredSkippedOutputs;
   std::vector<std::string> multiClockDomainSkippedOutputs;
-  std::vector<std::string> abstractedSequentialBoundaries;
+  std::vector<std::string> opaqueCellSkippedOutputs;
   std::vector<ExtractedBoundaryReportEntry> extractedBoundaryReports;
 
   double outputCoveragePercent() const {
@@ -89,9 +108,15 @@ class SequentialEquivalenceStrategy {
       KEPLER_FORMAL::Config::SolverType solverType =
           KEPLER_FORMAL::Config::getSolverType(),
       SecEngine secEngine = SecEngine::Pdr,
-      SecEncoding encoding = SecEncoding::DualRailSteady);
+      SecEncoding encoding = SecEncoding::DualRailSteady,
+      SecResetSpec resetSpec = {},
+      Btor2ExportOptions exportOptions = {});
 
   SequentialEquivalenceResult run(size_t maxK) const;
+  void setBoundaryPairs(const BoundaryPairs& pairs) { boundaryPairs_ = pairs; }
+  void setInternalRelationOptions(InternalRelationOptions options) {
+    internalRelationOptions_ = options;
+  }
   SequentialEquivalenceResult runExtractedModels(
       const SequentialDesignModel& model0,
       const SequentialDesignModel& model1,
@@ -103,13 +128,13 @@ class SequentialEquivalenceStrategy {
   KEPLER_FORMAL::Config::SolverType solverType_;
   SecEngine secEngine_;
   SecEncoding encoding_;
+  SecResetSpec resetSpec_;
+  Btor2ExportOptions exportOptions_;
+  BoundaryPairs boundaryPairs_;
+  InternalRelationOptions internalRelationOptions_;
 };
 
 namespace detail {
-
-constexpr size_t kMinPdrDualRailFrameZeroValidationOutputs = 256;
-constexpr size_t kMaxPdrDualRailFrameZeroValidationOutputs = 384;
-constexpr size_t kMaxPdrDualRailFrameZeroValidationStateSymbols = 1000000;
 
 SequentialEquivalenceProofProgress buildSecEngineProofProgress(
     const std::string& engineLabel,
@@ -122,20 +147,6 @@ std::vector<std::string> buildSecEngineProofProgressDiagLines(
     const std::vector<std::string>& observedOutputNames,
     size_t totalOutputCount,
     size_t provenOutputCount);
-
-inline bool shouldDeferPdrDualRailFrameZeroValidation( // LCOV_EXCL_LINE
-    size_t observedOutputSurface,
-    size_t railStateSymbolSurface) {
-  if (observedOutputSurface > kMaxPdrDualRailFrameZeroValidationOutputs) { // LCOV_EXCL_LINE
-    return true; // LCOV_EXCL_LINE
-  }
-  // A mid-wide output bus can still be too expensive when compact extraction
-  // expands the rail state into a very large surface.  Keep small probe designs
-  // on the exact validation path, but let PDR own huge SoC surfaces directly.
-  return observedOutputSurface >= kMinPdrDualRailFrameZeroValidationOutputs && // LCOV_EXCL_LINE
-         railStateSymbolSurface > // LCOV_EXCL_LINE
-             kMaxPdrDualRailFrameZeroValidationStateSymbols;
-} // LCOV_EXCL_LINE
 
 }  // namespace detail
 

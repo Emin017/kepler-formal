@@ -1,5 +1,5 @@
 // Copyright 2024-2026 keplertech.io
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 
 #include "kinduction/BaseCaseSolver.h"
 
@@ -1135,8 +1135,7 @@ void addDualRailStateValidity(
     const FrameVariableStore& variables,
     const std::vector<DualRailSymbolPair>& railPairs,
     const std::unordered_set<size_t>& solverSymbols,
-    size_t numFrames,
-    bool requireExactRails) {
+    size_t numFrames) {
   for (size_t frame = 0; frame < numFrames; ++frame) {
     for (const auto& rails : railPairs) {
       if (solverSymbols.find(rails.mayBeOne) == solverSymbols.end() ||
@@ -1150,22 +1149,8 @@ void addDualRailStateValidity(
       solver.addClause({
           variables.getLiteral(rails.mayBeOne, frame),
           variables.getLiteral(rails.mayBeZero, frame)});
-      if (requireExactRails) {
-        // Complete bootstrap/initial assignments are concrete Boolean states.
-        // For those problems, both rails true is only an abstraction artifact,
-        // so keep BMC in the same exact dual-rail state domain as induction.
-        solver.addClause({
-            -variables.getLiteral(rails.mayBeOne, frame),
-            -variables.getLiteral(rails.mayBeZero, frame)});
-      }
     }
   }
-}
-
-bool requiresConcreteDualRailStateDomain(const KInductionProblem& problem) {
-  return problem.usesDualRailStateEncoding &&
-         (problem.hasCompleteBootstrapStateAssignments() ||
-          problem.hasCompleteInitialState());
 }
 
 void addBlockedStateCubeClause(SATSolverWrapper& solver,
@@ -1691,6 +1676,12 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
   FrameVariableStore variables(solver, coi.solverSymbols, internalK + 1);
   addResetBootstrapConstraints(solver, variables, problem, internalK + 1);
   addInitialConstraints(solver, variables, problem, coi.solverSymbolSet, initialMode);
+  if (bootstrapFrames != 0 && problem.usesDualRailStateEncoding) {
+    // A reset prefix starts from the same exact ternary initialization as PDR;
+    // its final state is derived by transitions, not a per-register summary.
+    addInitialStateAssignments(
+        solver, variables, problem, coi.solverSymbolSet);
+  }
   if (resetBootstrapObservationFrontier) {
     addObservationPropertyConstraint(
         solver, variables, problem, bootstrapFrames);
@@ -1706,16 +1697,15 @@ std::optional<KInductionResult::CounterexampleWitness> findBaseCounterexampleImp
       solver, variables, problem, coi.solverSymbolSet, internalK + 1);
   addDualRailStateValidity(
       solver, variables, problem.dualRailStatePairs, coi.solverSymbolSet,
-      internalK + 1, requiresConcreteDualRailStateDomain(problem));
+      internalK + 1);
   for (size_t frame = 0; frame < internalK; ++frame) {
     addTransitionRelation(
         solver, variables, transitionByState, coi.transitionTargetsByFrame[frame], frame);
   }
-  if (bootstrapFrames != 0) {
+  if (bootstrapFrames != 0 && !problem.usesDualRailStateEncoding) {
     addBootstrapStateAssignments(
         solver, variables, problem, coi.solverSymbolSet, bootstrapFrames);
   }
-
   if (constrainPreviouslySafeFrames) {
     for (size_t frame = bootstrapFrames; frame < firstBadFrame; ++frame) {
       FrameFormulaEncoder encoder(
@@ -1857,7 +1847,7 @@ findImcCachedBaseCounterexampleAtFrontierQuery(
       solver, variables, problem, coi.solverSymbolSet, internalK + 1);
   addDualRailStateValidity(
       solver, variables, problem.dualRailStatePairs, coi.solverSymbolSet,
-      internalK + 1, requiresConcreteDualRailStateDomain(problem));
+      internalK + 1);
   for (size_t frame = 0; frame < internalK; ++frame) {
     addTransitionRelation(
         solver,
@@ -1984,7 +1974,7 @@ findImcAssumptionBaseCounterexampleAtFrontier( // LCOV_EXCL_LINE
       solver, variables, problem, coi.solverSymbolSet, internalK + 1); // LCOV_EXCL_LINE
   addDualRailStateValidity( // LCOV_EXCL_LINE
       solver, variables, problem.dualRailStatePairs, coi.solverSymbolSet, // LCOV_EXCL_LINE
-      internalK + 1, requiresConcreteDualRailStateDomain(problem)); // LCOV_EXCL_LINE
+      internalK + 1); // LCOV_EXCL_LINE
   for (size_t frame = 0; frame < internalK; ++frame) { // LCOV_EXCL_LINE
     addTransitionRelation( // LCOV_EXCL_LINE
         solver,
@@ -2075,6 +2065,7 @@ struct DualRailPublicBasePrefixResult {
 
 struct DualRailPublicBasePrefixCache {
   const KInductionProblem* problem = nullptr;
+  uint64_t verificationGeneration = 0;
   KEPLER_FORMAL::Config::SolverType solverType =
       KEPLER_FORMAL::Config::SolverType::KISSAT;
   bool hasSafeThrough = false;
@@ -2083,6 +2074,7 @@ struct DualRailPublicBasePrefixCache {
   void reset(const KInductionProblem& newProblem,
              KEPLER_FORMAL::Config::SolverType newSolverType) {
     problem = &newProblem;
+    verificationGeneration = KEPLER_FORMAL::Config::getVerificationGeneration();
     solverType = newSolverType;
     hasSafeThrough = false;
     safeThrough = 0;
@@ -2165,7 +2157,9 @@ DualRailPublicBasePrefixResult tryDualRailPublicBasePrefixCache(
   }
 
   auto& cache = dualRailPublicBasePrefixCache;
-  if (cache.problem != &problem || cache.solverType != solverType) {
+  if (cache.problem != &problem || cache.solverType != solverType ||
+      cache.verificationGeneration !=
+          KEPLER_FORMAL::Config::getVerificationGeneration()) {
     cache.reset(problem, solverType);
   }
   if (cache.hasSafeThrough && k <= cache.safeThrough) {
@@ -2983,8 +2977,7 @@ std::unique_ptr<CachedResetFrontierSolver> buildResetFrontierSolver(
       *cached->variables,
       problem.dualRailStatePairs,
       cached->coi.solverSymbolSet,
-      targetFrame + 1,
-      requiresConcreteDualRailStateDomain(problem));
+      targetFrame + 1);
   addResetFrontierFrameInvariantConstraints(
       *cached->solver, *cached->variables, data, targetFrame);
 
@@ -3089,8 +3082,7 @@ std::unique_ptr<CachedResetFrontierSolver> buildResetFrontierSolverForCoi(  // L
       // LCOV_EXCL_STOP
       cached->coi.solverSymbolSet,  // LCOV_EXCL_LINE
       // LCOV_EXCL_START
-      targetFrame + 1,  // LCOV_EXCL_LINE
-      requiresConcreteDualRailStateDomain(problem));  // LCOV_EXCL_LINE
+      targetFrame + 1);  // LCOV_EXCL_LINE
   addResetFrontierFrameInvariantConstraints(  // LCOV_EXCL_LINE
       *cached->solver, *cached->variables, data, targetFrame);  // LCOV_EXCL_LINE
 
@@ -3595,8 +3587,7 @@ bool resetSummaryPrecheckProvesUnreachable(
         variables,
         problem.dualRailStatePairs,
         coi.solverSymbolSet,
-        postBootstrapSteps + 1,
-        requiresConcreteDualRailStateDomain(problem));
+        postBootstrapSteps + 1);
     addBootstrapStateAssignments(
         solver, variables, problem, coi.solverSymbolSet, 0);
     for (const auto& blocker : frontierBlockers) {

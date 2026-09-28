@@ -1,7 +1,8 @@
 # Copyright 2024-2026 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 add_library(kepler_sec STATIC
+    export/SecBtor2Exporter.cpp
     common/BoolExprUtils.cpp
     common/ProofProblemDebug.cpp
     imc/CraigInterpolatingModelChecker.cpp
@@ -9,15 +10,16 @@ add_library(kepler_sec STATIC
     imc/IMCEngine.cpp
     kinduction/KInductionEngine.cpp
     kinduction/OutputBatching.cpp
+    model/SecNetlistChecks.cpp
     model/SequentialDesignModel.cpp
     pdr/PDREngine.cpp
     proof/DualRailEncoding.cpp
+    proof/InternalRelations.cpp
     proof/ProofEngineShared.cpp
     proof/TransitionExprResolver.cpp
     kinduction/BaseCaseSolver.cpp
     kinduction/InductionStepSolver.cpp
     kinduction/SatEncoding.cpp
-    strategy/ReachableStateInvariant.cpp
     strategy/SequentialEquivalenceStrategy.cpp
 )
 

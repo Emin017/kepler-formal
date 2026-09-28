@@ -1,5 +1,5 @@
 # Copyright 2024-2025 keplertech.io
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 
 add_executable(SNLTruthTableTreeTests SNLTruthTableTreeTests.cpp)
 
@@ -22,3 +22,15 @@ target_link_libraries(BoolExprCnfWriterTests
 )
 
 GTEST_DISCOVER_TESTS(BoolExprCnfWriterTests)
+
+add_executable(Btor2WriterTests Btor2WriterTests.cpp)
+target_link_libraries(Btor2WriterTests GTest::gtest_main formal_structures pthread)
+GTEST_DISCOVER_TESTS(Btor2WriterTests)
+
+add_executable(DesignBoundaryTests DesignBoundaryTests.cpp)
+target_link_libraries(DesignBoundaryTests
+    GTest::gtest_main
+    kepler_formal_utils
+    naja_nl
+)
+GTEST_DISCOVER_TESTS(DesignBoundaryTests)
