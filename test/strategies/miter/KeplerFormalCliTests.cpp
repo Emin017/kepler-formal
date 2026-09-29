@@ -2171,44 +2171,92 @@ TEST_F(KeplerFormalCliTests, CliVhdlReportsLoadFailures) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+namespace {
+
+// A 4-bit register that resets through a mux and only depends on itself.
+std::string vhdlSelfFeedingRegister(const std::string& resetValue,
+                                    const std::string& feedback) {
+  return "library ieee;\n"
+         "use ieee.std_logic_1164.all;\n"
+         "entity top is\n"
+         "  port (clk, rst : in std_logic;\n"
+         "        q : out std_logic_vector(3 downto 0));\n"
+         "end;\n"
+         "architecture rtl of top is\n"
+         "  signal t : std_logic_vector(3 downto 0);\n"
+         "begin\n"
+         "  q <= t;\n"
+         "  process (clk) begin\n"
+         "    if rising_edge(clk) then\n"
+         "      if rst = '1' then\n"
+         "        t <= \"" + resetValue + "\";\n"
+         "      else\n"
+         "        t(3) <= " + feedback + ";\n"
+         "        t(2) <= t(3);\n"
+         "        t(1) <= t(2);\n"
+         "        t(0) <= t(1);\n"
+         "      end if;\n"
+         "    end if;\n"
+         "  end process;\n"
+         "end;\n";
+}
+
+KEPLER_FORMAL::RunStatus runVhdlSec(const SimpleCliFixture& fixture,
+                                    std::vector<std::string> options) {
+  std::vector<std::string> args = {"kepler-formal", "-vhdl", "-v", "sec"};
+  args.insert(args.end(), options.begin(), options.end());
+  args.insert(args.end(), {"--design1", fixture.design0Path.string(),
+                           "--design2", fixture.design1Path.string()});
+  return runStructuredWithArgs(std::move(args)).result.status;
+}
+
+const std::vector<std::string> kBinaryResetBootstrap = {
+    "--sec-encoding", "binary", "--sec-reset-cycles", "1",
+    "--sec-reset-port", "rst=1"};
+
+}  // namespace
+
 TEST_F(KeplerFormalCliTests, CliVhdlFindsDifferenceInSelfFeedingRegister) {
-  // The register resets to ones through a mux and only depends on itself, so
-  // its state is known only if reset decides the mux over an unknown input.
-  const std::string prefix =
-      "library ieee;\n"
-      "use ieee.std_logic_1164.all;\n"
-      "entity top is\n"
-      "  port (clk, rst : in std_logic;\n"
-      "        q : out std_logic_vector(3 downto 0));\n"
-      "end;\n"
-      "architecture rtl of top is\n"
-      "  signal t : std_logic_vector(3 downto 0);\n"
-      "begin\n"
-      "  q <= t;\n"
-      "  process (clk) begin\n"
-      "    if rising_edge(clk) then\n"
-      "      if rst = '1' then\n"
-      "        t <= (others => '1');\n"
-      "      else\n";
-  const std::string suffix =
-      "        t(2) <= t(3);\n"
-      "        t(1) <= t(2);\n"
-      "        t(0) <= t(1);\n"
-      "      end if;\n"
-      "    end if;\n"
-      "  end process;\n"
-      "end;\n";
+  // The state is known only if reset decides the mux over an unknown input.
   const auto fixture = createDesignFixture(
       "vhd",
-      prefix + "        t(3) <= t(0);\n" + suffix,
-      prefix + "        t(3) <= not t(0);\n" + suffix);
-  const auto run = runStructuredWithArgs(
-      {"kepler-formal", "-vhdl", "-v", "sec",
-       "--design1", fixture.design0Path.string(),
-       "--design2", fixture.design1Path.string()});
-  EXPECT_NE(run.exitCode, EXIT_SUCCESS);
-  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+      vhdlSelfFeedingRegister("1111", "t(0)"),
+      vhdlSelfFeedingRegister("1111", "not t(0)"));
+  EXPECT_EQ(runVhdlSec(fixture, {}), KEPLER_FORMAL::RunStatus::Different);
   std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliVhdlBinaryResetBootstrapFindsResetMismatch) {
+  // The outputs cannot agree on the first frame after reset, so assuming that
+  // they do must not turn into a proof.
+  const auto fixture = createDesignFixture(
+      "vhd",
+      vhdlSelfFeedingRegister("1111", "t(0)"),
+      vhdlSelfFeedingRegister("0000", "t(0)"));
+  for (const std::string engine : {"pdr", "k_induction", "imc"}) {
+    SCOPED_TRACE(engine);
+    auto options = kBinaryResetBootstrap;
+    options.insert(options.end(), {"--sec-engine", engine});
+    EXPECT_EQ(runVhdlSec(fixture, options),
+              KEPLER_FORMAL::RunStatus::Different);
+  }
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
+TEST_F(KeplerFormalCliTests, CliVhdlBinaryResetBootstrapPdrFindsDifference) {
+  // PDR used to read past a ternary evaluation memo on this pair.
+  const auto fixture = createDesignFixture(
+      "vhd",
+      vhdlSelfFeedingRegister("1111", "t(0)"),
+      vhdlSelfFeedingRegister("1111", "not t(0)"));
+  EXPECT_EQ(runVhdlSec(fixture, kBinaryResetBootstrap),
+            KEPLER_FORMAL::RunStatus::Different);
+  const auto same = createEquivalentDesignFixture(
+      "vhd", vhdlSelfFeedingRegister("1111", "t(0)"));
+  EXPECT_EQ(runVhdlSec(same, kBinaryResetBootstrap),
+            KEPLER_FORMAL::RunStatus::Equivalent);
+  std::filesystem::remove_all(fixture.tmpDir);
+  std::filesystem::remove_all(same.tmpDir);
 }
 
 TEST_F(KeplerFormalCliTests, ConfigSv2vGateLevelVerilogTopAccepted) {
