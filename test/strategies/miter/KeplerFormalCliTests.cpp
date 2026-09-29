@@ -2171,6 +2171,46 @@ TEST_F(KeplerFormalCliTests, CliVhdlReportsLoadFailures) {
   std::filesystem::remove_all(fixture.tmpDir);
 }
 
+TEST_F(KeplerFormalCliTests, CliVhdlFindsDifferenceInSelfFeedingRegister) {
+  // The register resets to ones through a mux and only depends on itself, so
+  // its state is known only if reset decides the mux over an unknown input.
+  const std::string prefix =
+      "library ieee;\n"
+      "use ieee.std_logic_1164.all;\n"
+      "entity top is\n"
+      "  port (clk, rst : in std_logic;\n"
+      "        q : out std_logic_vector(3 downto 0));\n"
+      "end;\n"
+      "architecture rtl of top is\n"
+      "  signal t : std_logic_vector(3 downto 0);\n"
+      "begin\n"
+      "  q <= t;\n"
+      "  process (clk) begin\n"
+      "    if rising_edge(clk) then\n"
+      "      if rst = '1' then\n"
+      "        t <= (others => '1');\n"
+      "      else\n";
+  const std::string suffix =
+      "        t(2) <= t(3);\n"
+      "        t(1) <= t(2);\n"
+      "        t(0) <= t(1);\n"
+      "      end if;\n"
+      "    end if;\n"
+      "  end process;\n"
+      "end;\n";
+  const auto fixture = createDesignFixture(
+      "vhd",
+      prefix + "        t(3) <= t(0);\n" + suffix,
+      prefix + "        t(3) <= not t(0);\n" + suffix);
+  const auto run = runStructuredWithArgs(
+      {"kepler-formal", "-vhdl", "-v", "sec",
+       "--design1", fixture.design0Path.string(),
+       "--design2", fixture.design1Path.string()});
+  EXPECT_NE(run.exitCode, EXIT_SUCCESS);
+  EXPECT_EQ(run.result.status, KEPLER_FORMAL::RunStatus::Different);
+  std::filesystem::remove_all(fixture.tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, ConfigSv2vGateLevelVerilogTopAccepted) {
   SimpleCliFixture fixture;
   fixture.tmpDir = makeUniqueTempDir("kepler_formal_cli_sv2v");
