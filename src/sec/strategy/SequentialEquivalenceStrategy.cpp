@@ -3884,6 +3884,17 @@ SequentialEquivalenceResult SequentialEquivalenceStrategy::runExtractedModels(
     fflush(stderr);
   }
 
+  if (auto witness = SEC::findResetFrontierMismatch(proofProblem, solverType_)) {
+    const KInductionResult mismatch{
+        KInductionStatus::Different, 0, std::move(witness)};
+    return makeSecResult(
+        SequentialEquivalenceStatus::Different,
+        0,
+        formatCounterexampleWitness(mismatch, model0, model1, top0_, top1_),
+        aligned.outputCoverage,
+        extractedBoundaryReports);
+  }
+
   return runSelectedSecEngine(
       secEngine_,
       proofProblem,
