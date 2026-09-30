@@ -539,6 +539,19 @@ constexpr uint32_t kMaxPrimeImplicantInputs = 10;
 // all prime implicants agrees with a sum of rows on 0/1 inputs, and unlike it
 // stays exact when an input is unknown in ternary (dual-rail) evaluation: a
 // known select decides a mux whatever the unselected input is.
+//
+// Merging strategy (the first half of Quine-McCluskey):
+//   1. Start with one cube per table row whose output is 1.
+//   2. Merge two cubes that test the same inputs and differ in exactly one of
+//      them into a cube that no longer tests that input.
+//   3. Repeat on the merged cubes until nothing merges.
+//   4. Every cube that was never merged is a prime implicant.
+//
+// Example, out = rst OR s: the rows (rst=1, s=0) and (rst=1, s=1) merge into
+// the cube `rst`, which evaluates to 1 even when s is unknown.
+//
+// All prime implicants are kept, not a minimal cover: dropping a redundant one
+// would lose exactness on unknown inputs.
 static const std::vector<Cube>& primeImplicants(const SNLTruthTable& tbl,
                                                 uint32_t k) {
   thread_local std::vector<Cube> level, next, primes;
