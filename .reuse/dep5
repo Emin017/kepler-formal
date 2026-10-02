@@ -15,7 +15,7 @@ Files: test/*
 Copyright: 2025 keplertech.io
 License: Apache-2.0
 
-Files: BUILD.bazel MODULE.bazel .bazelrc .bazelversion .bazelignore .gitignore
+Files: BUILD.bazel MODULE.bazel .bazelrc .bazelversion .bazelignore .gitignore CLAUDE.md AGENTS.md
 Copyright: 2025 keplertech.io
 License: Apache-2.0
 
