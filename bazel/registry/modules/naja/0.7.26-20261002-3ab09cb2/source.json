@@ -1,0 +1,8 @@
+{
+    "url": "https://github.com/oharboe/naja/archive/3ab09cb281b0cdb2730a6d8f478b44d73bbadc00.tar.gz",
+    "integrity": "sha256-aS3yVgSG377qiu6W485yVfFSfdFpXURtmwiCAQWauAs=",
+    "strip_prefix": "naja-3ab09cb281b0cdb2730a6d8f478b44d73bbadc00",
+    "overlay": {
+        "MODULE.bazel": "sha256-epQGuxcVV6n8V/rhzFyJttBG9qF/eBs54eiYgLiisGs="
+    }
+}

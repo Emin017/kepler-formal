@@ -109,23 +109,20 @@ cmake .. \
   -DCMAKE_EXE_LINKER_FLAGS="-flto"
 ```
 
-### Bazel (experimental)
+### Bazel
 
-On Ubuntu, install the required host tools:
-
-```bash
-sudo apt-get install build-essential pkg-config bison flex python3-dev
-```
-
-Build and test with Bazelisk:
+The Bazel build needs no host packages on Linux (hermetic clang
+toolchain; every library and code generator is a Bazel module) and does
+not use the `thirdparty/` submodules:
 
 ```bash
 bazelisk build //src/bin:kepler-formal
-bazelisk test //test/...
+bazelisk test //...
 ```
 
-Additional notes and the BCR publication roadmap are tracked in
-[docs/bcr-roadmap.md](docs/bcr-roadmap.md).
+Dependencies, the in-tree registry for modules not yet on the Bazel
+Central Registry, and how to depend on kepler-formal from another Bazel
+module are described in [docs/bcr-roadmap.md](docs/bcr-roadmap.md).
 
 ## Usage
 

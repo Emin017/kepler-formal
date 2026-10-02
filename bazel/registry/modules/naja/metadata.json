@@ -1,0 +1,12 @@
+{
+    "homepage": "https://github.com/najaeda/naja",
+    "maintainers": [],
+    "repository": [
+        "github:najaeda/naja",
+        "github:oharboe/naja"
+    ],
+    "versions": [
+        "0.7.26-20261002-3ab09cb2"
+    ],
+    "yanked_versions": {}
+}
