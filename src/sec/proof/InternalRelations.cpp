@@ -148,6 +148,164 @@ BoolExpr* canonicalUnderMerge(BoolExpr* root,
   return root == nullptr ? nullptr : canonical.at(root);
 }
 
+// Numbers the same rewrite instead of building it: two transitions get one
+// number exactly when they are the same formula after the rewrite.  The
+// expression factory never frees a node, so building the rewrite of a whole
+// design there keeps a second copy of its logic for the rest of the run.  This
+// table lives in a few flat arrays that go back to the system with it.
+class RewriteTable {
+ public:
+  explicit RewriteTable(const std::unordered_map<size_t, size_t>& merged)
+      : merged_(merged), nodes_(1), slots_(size_t{1} << 16), memo_(size_t{1} << 16) {}
+
+  // Zero means no expression.
+  uint32_t numberOf(BoolExpr* root) {
+    if (root == nullptr) {
+      return 0;
+    }
+    stack_.assign({root});
+    while (!stack_.empty()) {
+      BoolExpr* node = stack_.back();
+      if (recall(node) != 0) {
+        stack_.pop_back();
+        continue;
+      }
+      const Op op = node->getOp();
+      if (op == Op::VAR) {
+        const auto it = merged_.find(node->getId());
+        remember(node, intern({it == merged_.end() ? node->getId() : it->second, 0, op}));
+        stack_.pop_back();
+        continue;
+      }
+      BoolExpr* left = node->getLeft();
+      BoolExpr* right = op == Op::NOT ? nullptr : node->getRight();
+      if (left == nullptr || (op != Op::NOT && right == nullptr)) {
+        // Not a formula this table reads: equal only to itself.
+        remember(node, intern({reinterpret_cast<uintptr_t>(node), 0, Op::NONE}));
+        stack_.pop_back();
+        continue;
+      }
+      const uint32_t a = recall(left);
+      const uint32_t b = right == nullptr ? 0 : recall(right);
+      if (a == 0 || (right != nullptr && b == 0)) {
+        if (a == 0) stack_.push_back(left);
+        if (right != nullptr && b == 0) stack_.push_back(right);
+        continue;
+      }
+      remember(node, op == Op::NOT ? negate(a) : op == Op::XOR
+                   ? intern({std::min(a, b), std::max(a, b), op}) : chain(op, a, b));
+      stack_.pop_back();
+    }
+    return recall(root);
+  }
+
+ private:
+  // `a` is a symbol for a leaf and a node number otherwise.
+  struct Node {
+    uint64_t a = 0;
+    uint32_t b = 0;
+    Op op = Op::NONE;
+    bool operator==(const Node&) const = default;
+  };
+  struct Memo {
+    BoolExpr* expr = nullptr;
+    uint32_t number = 0;
+  };
+
+  static size_t mix(uint64_t value) {
+    value ^= value >> 33;
+    value *= 0xFF51AFD7ED558CCDULL;
+    return value ^ (value >> 33);
+  }
+
+  uint32_t intern(const Node& node) {
+    if (nodes_.size() * 2 > slots_.size()) {
+      slots_.assign(slots_.size() * 2, 0);
+      for (uint32_t number = 1; number < nodes_.size(); ++number) {
+        slots_[freeSlot(nodes_[number])] = number;
+      }
+    }
+    const size_t slot = freeSlot(node);
+    if (slots_[slot] == 0) {
+      slots_[slot] = static_cast<uint32_t>(nodes_.size());
+      nodes_.push_back(node);
+    }
+    return slots_[slot];
+  }
+
+  // The slot holding `node`, or the empty one where it belongs.
+  size_t freeSlot(const Node& node) const {
+    size_t slot = mix(node.a * 0x9E3779B97F4A7C15ULL + node.b * 31 + static_cast<uint64_t>(node.op));
+    for (slot &= slots_.size() - 1; slots_[slot] != 0 && !(nodes_[slots_[slot]] == node);
+         slot = (slot + 1) & (slots_.size() - 1)) {
+    }
+    return slot;
+  }
+
+  uint32_t negate(uint32_t a) {
+    return nodes_[a].op == Op::NOT ? static_cast<uint32_t>(nodes_[a].a) : intern({a, 0, Op::NOT});
+  }
+
+  // See canonicalUnderMerge for the chain rule.
+  uint32_t chain(Op op, uint32_t a, uint32_t b) {
+    constexpr size_t kChainOperandLimit = 16;
+    operands_.clear();
+    chain_.assign({a, b});
+    while (!chain_.empty() && operands_.size() <= kChainOperandLimit) {
+      const uint32_t term = chain_.back();
+      chain_.pop_back();
+      if (nodes_[term].op == op) {
+        chain_.push_back(static_cast<uint32_t>(nodes_[term].a));
+        chain_.push_back(nodes_[term].b);
+      } else {
+        operands_.push_back(term);
+      }
+    }
+    if (operands_.size() > kChainOperandLimit) {
+      operands_.assign({a, b});
+    }
+    std::sort(operands_.begin(), operands_.end());
+    operands_.erase(std::unique(operands_.begin(), operands_.end()), operands_.end());
+    uint32_t rebuilt = operands_.front();
+    for (size_t i = 1; i < operands_.size(); ++i) {
+      rebuilt = intern({rebuilt, operands_[i], op});
+    }
+    return rebuilt;
+  }
+
+  size_t memoSlot(BoolExpr* expr) const {
+    size_t slot = mix(reinterpret_cast<uintptr_t>(expr)) & (memo_.size() - 1);
+    while (memo_[slot].expr != nullptr && memo_[slot].expr != expr) {
+      slot = (slot + 1) & (memo_.size() - 1);
+    }
+    return slot;
+  }
+
+  uint32_t recall(BoolExpr* expr) const { return memo_[memoSlot(expr)].number; }
+
+  void remember(BoolExpr* expr, uint32_t number) {
+    if (++memoSize_ * 4 > memo_.size() * 3) {
+      std::vector<Memo> old(memo_.size() * 2);
+      old.swap(memo_);
+      for (const Memo& entry : old) {
+        if (entry.expr != nullptr) {
+          memo_[memoSlot(entry.expr)] = entry;
+        }
+      }
+    }
+    memo_[memoSlot(expr)] = {expr, number};
+  }
+
+  const std::unordered_map<size_t, size_t>& merged_;
+  std::vector<Node> nodes_;
+  std::vector<uint32_t> slots_;
+  std::vector<Memo> memo_;
+  size_t memoSize_ = 0;
+  std::vector<BoolExpr*> stack_;
+  std::vector<uint32_t> chain_;
+  std::vector<uint32_t> operands_;
+};
+
 // Refines every candidate from one counterexample by replaying it, next to
 // random states that also satisfy the hypotheses, for several steps (Mony et
 // al., DAC 2005, section 3.2). Pairs of the greatest inductive subset stay
@@ -299,21 +457,28 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
     // once and only their real difference is left to search.
     std::unordered_map<size_t, BoolExpr*> rewritten;
     {
-      std::unordered_map<BoolExpr*, BoolExpr*> canonical;
+      RewriteTable table(merged);
       for (size_t i = 0; i < active.size(); ++i) {
         // Definedness hypotheses are not structural.
         bool structural = options.allowXEqualityInInternalRelations;
         for (const auto& [lhs, rhs] : active[i]->equalities) {
-          BoolExpr* left = canonicalUnderMerge(transitions.at(lhs), merged, canonical);
-          BoolExpr* right = canonicalUnderMerge(transitions.at(rhs), merged, canonical);
-          structural = structural && left != nullptr && left == right;
+          if (!structural) {
+            break;
+          }
+          const uint32_t left = table.numberOf(transitions.at(lhs));
+          structural = left != 0 && left == table.numberOf(transitions.at(rhs));
         }
         if (!structural) {
           pending.push_back(i);
-          for (const auto& [lhs, rhs] : active[i]->equalities) {
-            for (size_t symbol : {lhs, rhs}) {
-              rewritten[symbol] = canonicalUnderMerge(transitions.at(symbol), merged, canonical);
-            }
+        }
+      }
+    }
+    {
+      std::unordered_map<BoolExpr*, BoolExpr*> canonical;
+      for (size_t i : pending) {
+        for (const auto& [lhs, rhs] : active[i]->equalities) {
+          for (size_t symbol : {lhs, rhs}) {
+            rewritten[symbol] = canonicalUnderMerge(transitions.at(symbol), merged, canonical);
           }
         }
       }
@@ -510,10 +675,14 @@ void learnInternalStateRelations(
   const auto proved = proveInternalRelations(problem, candidates, options, solverType);
   problem.sameFrameStateEqualityPairs0.insert(
       problem.sameFrameStateEqualityPairs0.end(), proved.begin(), proved.end());
-  for (const auto& [lhs, rhs] : proved) {
-    BoolExpr* equality = BoolExpr::Not(BoolExpr::Xor(BoolExpr::Var(lhs), BoolExpr::Var(rhs)));
-    problem.learnedInternalRelationInvariant = problem.learnedInternalRelationInvariant == nullptr
-        ? equality : BoolExpr::And(problem.learnedInternalRelationInvariant, equality);
+  // The conjunction costs nodes that are never freed for every relation, and
+  // only the exact IMC engine reads it.
+  if (!problem.usesLargeDualRailImc()) {
+    for (const auto& [lhs, rhs] : proved) {
+      BoolExpr* equality = BoolExpr::Not(BoolExpr::Xor(BoolExpr::Var(lhs), BoolExpr::Var(rhs)));
+      problem.learnedInternalRelationInvariant = problem.learnedInternalRelationInvariant == nullptr
+          ? equality : BoolExpr::And(problem.learnedInternalRelationInvariant, equality);
+    }
   }
   if (diagnostics) {
     printf("SEC summary: internal_relation_candidates=%zu proved_rail_equalities=%zu "

@@ -48,9 +48,13 @@ jointly 1-step inductive: if every pair is equal now, every pair is equal after
 one transition.
 
 - **Structural proof.** Each transition is rewritten under the hypotheses: a
-  register merged into another reads that register's leaf. Expressions are
-  hash-consed, so two transitions that are the same formula after the rewrite
-  are one node, and that candidate is proved without the solver. Short AND/OR
+  register merged into another reads that register's leaf. The rewrite is
+  numbered in a temporary table rather than built: two transitions get one
+  number exactly when they are the same formula after the rewrite, and that
+  candidate is proved without the solver. The table is freed when the round
+  ends. Expressions themselves are never freed, so building the rewrite of a
+  whole design would keep a second copy of its logic for the rest of the run
+  (about 3.5 GB on nangate45_black_parrot). Short AND/OR
   chains are rebuilt from their sorted operands, because physical optimization
   swaps the pins of symmetric gates and that re-brackets the chain. Sorting the
   operands of an AND or an OR cannot change the function, so a pin swap on a
@@ -61,8 +65,9 @@ one transition.
   papers.
 - **Speculative reduction.** The candidates that remain go to the solver. The
   hypotheses are applied by literal substitution: both registers of a pair
-  share one current-frame literal. The solver reads the rewritten transitions,
-  so logic the two sides have in common is encoded once and needs no search.
+  share one current-frame literal. For these candidates only, the rewritten
+  transitions are built as expressions and the solver reads them, so logic the
+  two sides have in common is encoded once and needs no search.
   (Mony et al., DAC 2005; Mishchenko et al., ICCAD 2008, section 3.2.)
 - **Partitioning.** One-step register correspondence needs a single time frame,
   so the candidates are split into partitions bounded by solver variables.
@@ -97,6 +102,11 @@ Simulation only drops candidates. It never proves one.
 Dropping a hypothesis weakens every other proof, so the rounds repeat with a
 fresh encoding. The survivors are returned only after a whole round drops
 nothing; if the round limit is reached first, nothing is returned.
+
+The engines receive the survivors as a list of pairs. The exact IMC engine also
+reads their conjunction as one formula, so that formula is built only for the
+problems that engine handles: binary encoding, or dual rail with at most 12
+state bits. Larger dual-rail problems are proved per output from the pairs.
 
 With `KEPLER_SEC_DIAG` set, each round prints how many candidates were active,
 proved structurally and dropped, and each solver partition prints its status
