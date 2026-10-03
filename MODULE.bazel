@@ -1,9 +1,9 @@
 """kepler-formal: formal equivalence checking on naja netlists.
 
-Every dependency is a plain bazel_dep. Modules that are not yet on the
-Bazel Central Registry (kissat, glucose, cadical, naja and naja's own
-non-BCR dependencies) are served by the registry in bazel/registry/,
-which .bazelrc lists ahead of BCR. See bazel/registry/README.md.
+Every dependency is a plain bazel_dep. Versions that are not on the
+Bazel Central Registry yet come from their open BCR pull requests, and
+naja's development pin from bazel/registry/; .bazelrc lists both ahead
+of BCR. See docs/bcr-roadmap.md.
 """
 
 module(
@@ -16,7 +16,7 @@ module(
 bazel_dep(name = "cadical", version = "3.0.0")
 bazel_dep(name = "glucose", version = "4.2.1-20251230-674dbba")
 bazel_dep(name = "kissat", version = "4.0.4")
-bazel_dep(name = "naja", version = "0.7.26-20261002-3ab09cb2")
+bazel_dep(name = "naja", version = "0.7.26-20261003-d298a369")
 bazel_dep(name = "onetbb", version = "2023.1.0")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.25")

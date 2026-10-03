@@ -30,36 +30,31 @@ plain `bazel_dep`. Keep it that way. Invariants:
 - Load every rule (`@rules_cc//cc:cc_library.bzl`,
   `@rules_shell//shell:sh_test.bzl`, …); Bazel 9 has no native ones.
 
-**Where dependencies come from.** `.bazelrc` lists the in-tree registry
-`bazel/registry/` ahead of BCR; Bazel takes each `name@version` from the
-first registry that has it. The in-tree registry holds what is not on
-BCR yet, in BCR's exact layout (`MODULE.bazel`, `source.json`,
-`overlay/`, `patches/`, `presubmit.yml`); `bazel/registry/README.md`
-lists the entries and why each exists. kissat, cadical and glucose are
-ours (upstream has no Bazel build, so they carry BUILD overlays). naja's
-entry is ours too; naja-if, naja-verilog, sv-lang and bison are copies
-of naja's `bazel/registry/` entries — update them from there when
-bumping naja, don't diverge.
-
-To add or bump a module: new version directory,
-`bazel/registry/update_source.py <name> <version> <url> [<strip_prefix>]`,
-point the `bazel_dep` at it. Unreleased commits use
-`<release>-<YYYYMMDD>-<commit>` versions. Never change a version's
-contents once something depends on it; add a new version. (When you do
-edit one in place during development, `bazel shutdown` first: Bazel
-caches registry entries as immutable.)
+**Where dependencies come from.** Everything comes from BCR. A module
+version not on BCR yet comes from its open bazel-central-registry pull
+request (one module per PR): `.bazelrc` lists the PR's commit
+(`https://raw.githubusercontent.com/<fork>/bazel-central-registry/<sha>/`)
+ahead of BCR, and Bazel takes each `name@version` from the first
+registry that has it. Drop the line once the PR merges; when a PR needs
+a fix, push a new commit (no force-push, pinned commits must stay
+reachable) and move the pin. The one exception is naja's development
+pin (#457 + #455 merged, `oharboe/naja@kepler-pin`), served from the
+in-tree `bazel/registry/` until naja is released and on BCR; bump it with
+`bazel/registry/update_source.py naja <version> <url> [<strip_prefix>]`.
+Unreleased commits use `<release>-<YYYYMMDD>-<commit>` versions. Never
+change a version's contents once something depends on it; add a new
+version.
 
 To try a local naja checkout without touching the registry:
 `bazel test //... --override_module=naja=<path>`. Don't commit such
 overrides.
 
-**Publishing to BCR**: naja's registry modules first, then this repo's
-(kissat, cadical, glucose, naja), each by copying
-`bazel/registry/modules/<name>/` into a bazel-central-registry pull
-request and deleting it here; then kepler-formal itself through the
-publish-to-bcr app (`.bcr/` templates; maintainers: xtofalex,
-nanocoh). Registry entries contain no symlinks: BCR rejects them, so
-`overlay/MODULE.bazel` is a copy. See `docs/bcr-roadmap.md`.
+**Publishing to BCR**: one module per bazel-central-registry pull
+request, each based on BCR main, so each goes in on its own. Then naja
+(publish-to-bcr from a naja release), then kepler-formal itself through
+the publish-to-bcr app (`.bcr/` templates; maintainers: xtofalex,
+nanocoh). BCR rejects symlinks in entries, so `overlay/MODULE.bazel` is a
+copy. See `docs/bcr-roadmap.md`.
 
 **Known traps** (each already fixed; don't reintroduce):
 

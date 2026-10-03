@@ -1,57 +1,36 @@
 # In-tree Bazel registry
 
-kepler-formal's `MODULE.bazel` contains only `bazel_dep`s. Modules that
-are not (yet) on the [Bazel Central Registry](https://registry.bazel.build/)
-are served from this directory, which `.bazelrc` lists ahead of BCR:
+This registry holds one module: `naja`, at the development pin
+kepler-formal is tested against (najaeda/naja#457 merged with #455,
+`oharboe/naja@kepler-pin`), until naja is released and on the
+[Bazel Central Registry](https://registry.bazel.build/). Then it goes away.
 
-```
-common --registry=file://%workspace%/bazel/registry
-common --registry=https://bcr.bazel.build/
-```
+Every other module that is not on BCR yet comes from its open
+bazel-central-registry pull request; `.bazelrc` lists those by commit,
+after this registry and ahead of BCR.
 
-| Module | Why it is here |
-|---|---|
-| `cadical`, `glucose`, `kissat` | not on BCR; upstream has no Bazel build, so the entries carry `overlay/BUILD.bazel` |
-| `naja` | not on BCR |
-| `naja-if`, `naja-verilog`, `sv-lang`, `bison` | naja's dependencies, copied from naja's own `bazel/registry/` (`bison` 3.8.2.bcr.10 is BCR's bcr.9 with a fix for hermetic-llvm, see naja's README) |
+The layout is BCR's (`modules/naja/metadata.json`,
+`modules/naja/<version>/{MODULE.bazel,source.json,presubmit.yml,overlay/}`).
+`overlay/MODULE.bazel` is a copy of the version's `MODULE.bazel`; BCR
+rejects symlinks.
 
-The layout is exactly BCR's (`modules/<name>/metadata.json`,
-`modules/<name>/<version>/{MODULE.bazel,source.json,presubmit.yml,overlay/,patches/}`),
-so publishing a module is a matter of copying its directory into a
-[bazel-central-registry](https://github.com/bazelbuild/bazel-central-registry)
-pull request, then deleting it here. As in BCR, `overlay/MODULE.bazel` is
-a copy of the version's `MODULE.bazel` (BCR rejects symlinks).
+## Bumping naja
 
-Unreleased commits use BCR's `<release>-<YYYYMMDD>-<commit>` version
-scheme, e.g. `4.2.1-20251230-674dbba`.
-
-## Updating a module
-
-1. Add `modules/<name>/<version>/` with a `MODULE.bazel` whose
-   `module(version = ...)` matches the directory name, plus any
-   `overlay/` files or `patches/` (applied with `-p1`).
-2. Add the version to `modules/<name>/metadata.json`.
-3. Write `source.json`:
-
-   ```
-   bazel/registry/update_source.py <name> <version> <archive-url> [<strip_prefix>]
-   ```
-
-   Rerun it after editing an overlay file or patch; it records their
-   integrity hashes too.
-4. Point the `bazel_dep` in `MODULE.bazel` at the new version.
-
-When bumping naja, also copy over any `naja-if`, `naja-verilog` or
-`sv-lang` versions its `MODULE.bazel` now asks for from naja's
-`bazel/registry/modules/`.
+1. Add `modules/naja/<version>/`, versioned `0.7.26-<YYYYMMDD>-<commit>`,
+   with naja's `MODULE.bazel` at that commit (its `module(version = ...)`
+   set to the directory name), copied to `overlay/MODULE.bazel`.
+2. Put the version in `modules/naja/metadata.json`.
+3. `bazel/registry/update_source.py naja <version> https://github.com/<owner>/naja/archive/<commit>.tar.gz naja-<commit>`
+4. Point the `bazel_dep` in `MODULE.bazel` at it, and add any new BCR
+   pull request registries naja's `.bazelrc` lists.
 
 ## Depending on kepler-formal from another module
 
-A module that depends on kepler-formal needs these registry entries too.
-Either copy `modules/` into its own registry, or list this one by a
-pinned URL, as `.github/consumer-test` does with a local path:
+List this registry by a pinned URL, then the BCR pull request registries
+from kepler-formal's `.bazelrc`, then BCR:
 
 ```
 common --registry=https://raw.githubusercontent.com/keplertech/kepler-formal/<commit>/bazel/registry/
+common --registry=https://raw.githubusercontent.com/oharboe/bazel-central-registry/<sha>/   # one per BCR PR
 common --registry=https://bcr.bazel.build/
 ```

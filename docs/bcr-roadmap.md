@@ -27,29 +27,33 @@ BCR: `onetbb`, `spdlog`, `yaml-cpp`, `googletest`, and, through naja,
 `capnp-cpp`, `boost.*`, `fmt`, `bison`, `flex`, `rules_python`, and
 others.
 
-What is not on BCR yet is served by the in-tree registry in
-[`bazel/registry/`](../bazel/registry/README.md), which `.bazelrc` lists
-ahead of BCR:
+What is not on BCR yet comes from its open bazel-central-registry pull
+request, which `.bazelrc` lists by commit ahead of BCR:
 
-| Module | Source |
+| Module | BCR pull request |
 |---|---|
-| `kissat` 4.0.4, `cadical` 3.0.0, `glucose` 4.2.1+ | upstream release/commit archives, with BUILD files as BCR overlays |
-| `naja` | naja's own Bazel build |
-| `naja-if`, `naja-verilog`, `sv-lang` | copied from naja's `bazel/registry/` |
+| `bison` 3.8.2.bcr.10 | bazelbuild/bazel-central-registry#10879 |
+| `sv-lang` 11.0.0-20260701-b60d729d.bcr.1 | bazelbuild/bazel-central-registry#10882 |
+| `naja-if` | bazelbuild/bazel-central-registry#10881 |
+| `naja-verilog` | bazelbuild/bazel-central-registry#10885 |
+| `kissat` 4.0.4 | bazelbuild/bazel-central-registry#10880 |
+| `cadical` 3.0.0 | bazelbuild/bazel-central-registry#10883 |
+| `glucose` 4.2.1-20251230-674dbba | bazelbuild/bazel-central-registry#10884 |
 
-The registry uses BCR's layout, so publishing a module is a matter of
-copying its directory into a bazel-central-registry pull request.
-`bazel/registry/README.md` describes how to add or bump a module.
+`naja` itself is served from the in-tree
+[`bazel/registry/`](../bazel/registry/README.md) until it is released and
+on BCR.
 
 ## Depending on kepler-formal
 
 Until kepler-formal and the modules above are on BCR, a downstream
-module needs kepler-formal's registry ahead of BCR, either vendored or
-by a pinned URL:
+module lists the same registries as kepler-formal's `.bazelrc`, with
+kepler-formal's `bazel/registry/` by pinned URL:
 
 ```
 # .bazelrc
 common --registry=https://raw.githubusercontent.com/keplertech/kepler-formal/<commit>/bazel/registry/
+# ...the BCR pull request registries from kepler-formal's .bazelrc...
 common --registry=https://bcr.bazel.build/
 build --cxxopt=-std=c++20
 ```
@@ -68,9 +72,9 @@ git_override(
 
 ## Publishing to BCR
 
-1. Publish the registry modules kepler-formal depends on (naja's first,
-   then kepler-formal's), deleting each from `bazel/registry/` as it
-   lands on BCR.
+1. Get the BCR pull requests above merged, dropping each `.bazelrc`
+   line as it lands, then naja (released, via publish-to-bcr), deleting
+   it from `bazel/registry/`.
 2. Ensure the version in `MODULE.bazel` matches
    `src/bin/KeplerVersion.h.in`, and tag a release with
    `bazelisk run //:release` (see `docs/releasing.md`).

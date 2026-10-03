@@ -120,8 +120,8 @@ bazelisk build //src/bin:kepler-formal
 bazelisk test //...
 ```
 
-Dependencies, the in-tree registry for modules not yet on the Bazel
-Central Registry, and how to depend on kepler-formal from another Bazel
+Dependencies, where modules not yet on the Bazel Central Registry come
+from, and how to depend on kepler-formal from another Bazel
 module are described in [docs/bcr-roadmap.md](docs/bcr-roadmap.md).
 
 ## Usage
