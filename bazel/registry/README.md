@@ -20,7 +20,7 @@ The layout is exactly BCR's (`modules/<name>/metadata.json`,
 so publishing a module is a matter of copying its directory into a
 [bazel-central-registry](https://github.com/bazelbuild/bazel-central-registry)
 pull request, then deleting it here. As in BCR, `overlay/MODULE.bazel` is
-a symlink to the version's `MODULE.bazel`.
+a copy of the version's `MODULE.bazel` (BCR rejects symlinks).
 
 Unreleased commits use BCR's `<release>-<YYYYMMDD>-<commit>` version
 scheme, e.g. `4.2.1-20251230-674dbba`.
