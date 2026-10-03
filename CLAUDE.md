@@ -57,7 +57,9 @@ overrides.
 (kissat, cadical, glucose, naja), each by copying
 `bazel/registry/modules/<name>/` into a bazel-central-registry pull
 request and deleting it here; then kepler-formal itself through the
-publish-to-bcr app (`.bcr/` templates). See `docs/bcr-roadmap.md`.
+publish-to-bcr app (`.bcr/` templates; maintainers: xtofalex,
+nanocoh). Registry entries contain no symlinks: BCR rejects them, so
+`overlay/MODULE.bazel` is a copy. See `docs/bcr-roadmap.md`.
 
 **Known traps** (each already fixed; don't reintroduce):
 
