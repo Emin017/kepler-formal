@@ -511,7 +511,10 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
       }
     }
     for (size_t begin = 0, end = 0; begin < pending.size(); begin = end) {
-      SATSolverWrapper::CadicalWorkBudget budget(100000, 1000000, 10000000);
+      // Every limit allows 100 decisions and 1000 ticks for each conflict. A
+      // tighter decision or tick limit gives up on queries the conflict limit
+      // still allows, and one pair given up unravels every pair that reads it.
+      SATSolverWrapper::CadicalWorkBudget budget(100000, 10000000, 100000000);
       SATSolverWrapper::ScopedCadicalWorkBudget budgetScope(budget);
       SATSolverWrapper solver(SATSolverWrapper::assumptionSolverTypeFor(solverType));
       // A partition reads a small part of the design, so solver variables
@@ -564,7 +567,7 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
       badClause.push_back(-allTogether);
       solver.addClause(badClause);
       const auto status = solver.solveWithAssumptionsStatus(
-          {allTogether}, 10000, 100000, 1000000);
+          {allTogether}, 10000, 1000000, 10000000);
       if (isSecDiagEnabled()) {
         printf("SEC diag: internal relations round=%zu partition=%zu..%zu vars=%d status=%s "
                "conflicts=%llu decisions=%llu ticks=%llu\n",
@@ -581,7 +584,7 @@ std::vector<std::pair<size_t, size_t>> proveInternalRelations(
         // the undecided ones are given up (Mony et al., sections 2 and 4.1).
         for (size_t i = begin; i < end; ++i) {
           refuted[pending[i]] = solver.solveWithAssumptionsStatus(
-                                    {-conclusions[i - begin]}, 1000, 10000, 100000) !=
+                                    {-conclusions[i - begin]}, 1000, 100000, 1000000) !=
                                 SATSolverWrapper::SolveStatus::Unsat;
         }
       } else if (status == SATSolverWrapper::SolveStatus::Sat) {
