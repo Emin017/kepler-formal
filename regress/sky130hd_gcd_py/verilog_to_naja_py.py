@@ -42,7 +42,7 @@ def bitterm_ref(design_expr, bit_term):
         return "%s.getBusTerm(%s).getBusTermBit(%d)" % (design_expr, q(bit_term.getBus().getName()), bit_term.getBit())
     return "%s.getScalarTerm(%s)" % (design_expr, q(bit_term.getName()))
 
-lines = ["# Copyright 2026 keplertech.io", "# SPDX-License-Identifier: Apache-2.0", "", "import naja", "", "",
+lines = ["# Copyright 2026 keplertech.io", "# SPDX-License-" + "Identifier: Apache-2.0", "", "import naja", "", "",
          "def primitive(lib, name):",
          "    for primitives in lib.getDB().getPrimitiveLibraries():",
          "        model = primitives.getSNLDesign(name)",
