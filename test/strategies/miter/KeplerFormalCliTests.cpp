@@ -2921,6 +2921,142 @@ TEST_F(KeplerFormalCliTests, CliPythonDesignInputSecWithLibertyCells) {
   std::filesystem::remove_all(tmpDir);
 }
 
+namespace {
+
+// A technology-free cell set: gates by truth table and a flop by sequential
+// model, all defined in Python. No Liberty file takes part in the run.
+const char* const kPythonGenericCells =
+    "import naja\n"
+    "\n"
+    "def gate(lib, name, inputs, output, truth_table):\n"
+    "    primitive = naja.SNLDesign.createPrimitive(lib, name)\n"
+    "    for input_name in inputs:\n"
+    "        naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Input, input_name)\n"
+    "    naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Output, output)\n"
+    "    primitive.setTruthTable(truth_table)\n"
+    "\n"
+    "def flop(lib):\n"
+    "    primitive = naja.SNLDesign.createPrimitive(lib, 'DFF')\n"
+    "    d = naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Input, 'D')\n"
+    "    ck = naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Input, 'CK')\n"
+    "    q = naja.SNLScalarTerm.create(primitive, naja.SNLTerm.Direction.Output, 'Q')\n"
+    "    naja.SNLDesign.addInputsToClockArcs([d], ck)\n"
+    "    naja.SNLDesign.addClockToOutputsArcs(ck, q)\n"
+    "    ck.setRole(naja.SNLTermRole.Clock)\n"
+    "    d.setRole(naja.SNLTermRole.DataInput)\n"
+    "    q.setRole(naja.SNLTermRole.DataOutput)\n"
+    "    primitive.setSequentialModel(\n"
+    "        clocked_on='CK', states=[{'name': 'IQ', 'next_state': 'D'}], outputs=[(q, 'IQ')])\n"
+    "\n"
+    "def constructPrimitives(lib):\n"
+    "    gate(lib, 'INV', ['A'], 'Y', 0b01)\n"
+    "    gate(lib, 'AND2', ['A', 'B'], 'Y', 0b1000)\n"
+    "    gate(lib, 'OR2', ['A', 'B'], 'Y', 0b1110)\n"
+    "    gate(lib, 'XOR2', ['A', 'B'], 'Y', 0b0110)\n"
+    "    flop(lib)\n";
+
+// 2-bit counter with synchronous reset on the generic cells:
+// d0 = ~q0 & ~rst, d1 = (q1 ^ q0) & ~rst.
+const char* const kPythonGenericCounterA =
+    "def constructLibrary(lib):\n"
+    "    inv, and2, xor2, dff = (primitive(lib, c) for c in ('INV', 'AND2', 'XOR2', 'DFF'))\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['clk', 'rst'], ['q0', 'q1'])\n"
+    "    wires(top, n, ['nrst', 't0', 't1', 'd0', 'd1'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_rst'); connect(i, 'A', n['rst']); connect(i, 'Y', n['nrst'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_q0'); connect(i, 'A', n['q0']); connect(i, 'Y', n['t0'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d0'); connect(i, 'A', n['t0']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d0'])\n"
+    "    i = naja.SNLInstance.create(top, xor2, 'x_d1'); connect(i, 'A', n['q1']); connect(i, 'B', n['q0']); connect(i, 'Y', n['t1'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d1'); connect(i, 'A', n['t1']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d1'])\n"
+    "    for k in ('0', '1'):\n"
+    "        r = naja.SNLInstance.create(top, dff, 'r' + k)\n"
+    "        connect(r, 'D', n['d' + k]); connect(r, 'CK', n['clk']); connect(r, 'Q', n['q' + k])\n";
+
+// The same counter with the XOR rebuilt from AND, OR and INV.
+const char* const kPythonGenericCounterB =
+    "def constructLibrary(lib):\n"
+    "    inv, and2, or2, dff = (primitive(lib, c) for c in ('INV', 'AND2', 'OR2', 'DFF'))\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['clk', 'rst'], ['q0', 'q1'])\n"
+    "    wires(top, n, ['nrst', 'nq0', 'nq1', 'p', 'm', 's', 'd0', 'd1'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_rst'); connect(i, 'A', n['rst']); connect(i, 'Y', n['nrst'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_q0'); connect(i, 'A', n['q0']); connect(i, 'Y', n['nq0'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_q1'); connect(i, 'A', n['q1']); connect(i, 'Y', n['nq1'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d0'); connect(i, 'A', n['nq0']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d0'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_p'); connect(i, 'A', n['q1']); connect(i, 'B', n['nq0']); connect(i, 'Y', n['p'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_m'); connect(i, 'A', n['nq1']); connect(i, 'B', n['q0']); connect(i, 'Y', n['m'])\n"
+    "    i = naja.SNLInstance.create(top, or2, 'o_s'); connect(i, 'A', n['p']); connect(i, 'B', n['m']); connect(i, 'Y', n['s'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d1'); connect(i, 'A', n['s']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d1'])\n"
+    "    for k in ('0', '1'):\n"
+    "        r = naja.SNLInstance.create(top, dff, 'r' + k)\n"
+    "        connect(r, 'D', n['d' + k]); connect(r, 'CK', n['clk']); connect(r, 'Q', n['q' + k])\n";
+
+// Counter A with OR in place of XOR on bit 1: bit 1 sticks once set, so the
+// two counters part ways on the fourth count with both values defined. A
+// combinational check of the cones could not tell this from counter A's
+// gate choice; the flop model makes it a sequential difference.
+const char* const kPythonGenericCounterBroken =
+    "def constructLibrary(lib):\n"
+    "    inv, and2, or2, dff = (primitive(lib, c) for c in ('INV', 'AND2', 'OR2', 'DFF'))\n"
+    "    top = naja.SNLDesign.create(lib, 'top')\n"
+    "    n = ports(top, ['clk', 'rst'], ['q0', 'q1'])\n"
+    "    wires(top, n, ['nrst', 't0', 't1', 'd0', 'd1'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_rst'); connect(i, 'A', n['rst']); connect(i, 'Y', n['nrst'])\n"
+    "    i = naja.SNLInstance.create(top, inv, 'i_q0'); connect(i, 'A', n['q0']); connect(i, 'Y', n['t0'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d0'); connect(i, 'A', n['t0']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d0'])\n"
+    "    i = naja.SNLInstance.create(top, or2, 'o_d1'); connect(i, 'A', n['q1']); connect(i, 'B', n['q0']); connect(i, 'Y', n['t1'])\n"
+    "    i = naja.SNLInstance.create(top, and2, 'a_d1'); connect(i, 'A', n['t1']); connect(i, 'B', n['nrst']); connect(i, 'Y', n['d1'])\n"
+    "    for k in ('0', '1'):\n"
+    "        r = naja.SNLInstance.create(top, dff, 'r' + k)\n"
+    "        connect(r, 'D', n['d' + k]); connect(r, 'CK', n['clk']); connect(r, 'Q', n['q' + k])\n";
+
+}  // namespace
+
+// Python input with the cells' behaviour defined in Python too: no Liberty
+// file anywhere. Two counters built differently from the same generic cells
+// prove equal, and a counter that counts differently is refuted, so the flop's
+// sequential model is what the proof runs on.
+TEST_F(KeplerFormalCliTests, ConfigPythonDesignInputWithPythonCellModelsOnly) {
+  const auto pyModuleDir = findBuiltNajaModuleDir();
+  ASSERT_FALSE(pyModuleDir.empty());
+  EnvVarGuard pythonPathGuard("PYTHONPATH");
+  pythonPathGuard.set(pyModuleDir.string());
+
+  const auto tmpDir = makeUniqueTempDir("kepler_formal_cli_python_cells");
+  const auto cells = tmpDir / "cells.py";
+  { std::ofstream out(cells); out << kPythonGenericCells; }
+  const auto counterA = writePythonDesign(tmpDir / "counter_a.py", kPythonGenericCounterA);
+  const auto counterB = writePythonDesign(tmpDir / "counter_b.py", kPythonGenericCounterB);
+  const auto broken = writePythonDesign(tmpDir / "counter_broken.py", kPythonGenericCounterBroken);
+
+  const auto runSec = [&](const std::filesystem::path& design0,
+                          const std::filesystem::path& design1) {
+    const auto cfgPath = writeTempConfig(
+        "format: python\n"
+        "verification: sec\n"
+        "sec_engine: pdr\n"
+        "max_k: 8\n"
+        "input_paths:\n"
+        "  - " + design0.string() + "\n"
+        "  - " + design1.string() + "\n"
+        "py_tech_files:\n"
+        "  - " + cells.string() + "\n"
+        "sec_reset:\n"
+        "  cycles: 1\n"
+        "  ports:\n"
+        "    - name: rst\n"
+        "      active_value: 1\n");
+    const int rc = runWithConfigFile(cfgPath);
+    std::filesystem::remove(cfgPath);
+    return rc;
+  };
+
+  EXPECT_EQ(runSec(counterA, counterB), kSecProvedExitCode);
+  EXPECT_EQ(runSec(counterA, counterA), kSecProvedExitCode);
+  EXPECT_EQ(runSec(counterA, broken), kSecCounterexampleExitCode);
+  std::filesystem::remove_all(tmpDir);
+}
+
 TEST_F(KeplerFormalCliTests, CliPythonTopOptionsRejectedWithOtherFormats) {
   const auto fixture = createEquivalentDesignFixture(
       "v",
